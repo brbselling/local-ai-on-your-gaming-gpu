@@ -1,13 +1,13 @@
-# Checks install.ps1 and windows/bonsai2.ps1 on a real Windows PowerShell 5.1 with fake cards.
-# The runner has no GPU, so the big downloads and the model start are skipped (BONSAI_TEST).
-name: windows installer check
+# Checks install.ps1 and windows/bonsai2.ps1 on a real Windows PowerShell 5.1, and install.sh in bash, with fake cards.
+# The runners have no GPU, so the big downloads and the model start are skipped (BONSAI_TEST).
+name: installer check
 
 on:
   push:
     branches: [windows]
-    paths: ['install.ps1', 'windows/**', '.github/workflows/windows-installer.yml']
+    paths: ['install.ps1', 'install.sh', 'windows/**', '.github/workflows/windows-installer.yml']
   pull_request:
-    paths: ['install.ps1', 'windows/**']
+    paths: ['install.ps1', 'install.sh', 'windows/**']
   workflow_dispatch:
 
 permissions:
@@ -86,3 +86,36 @@ jobs:
           if ('${{ matrix.tier }}' -eq '8gb' -and $out -notmatch '-c 49152') { throw '8gb tier at 7900 MiB free should pick -c 49152' }
           if ('${{ matrix.tier }}' -ne '8gb' -and $out -notmatch '--fit on') { throw 'this tier should use --fit on' }
           if ('${{ matrix.tier }}' -eq '16gb' -and $out -notmatch 'mmproj') { throw '16gb tier should load the vision file' }
+
+  linux:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { card: 'RTX 3060 12GB', gpu: '0, NVIDIA GeForce RTX 3060, 12288, 595.95, 8.6', tier: '12gb', bundle: 'cuda12.4-sm86-sm89' }
+          - { card: 'RTX 5060 Ti 16GB', gpu: '0, NVIDIA GeForce RTX 5060 Ti, 16311, 595.95, 12.0', tier: '16gb', bundle: 'cuda12.8-sm120' }
+          - { card: 'RTX 3000 Ada Laptop 8GB', gpu: '0, NVIDIA RTX 3000 Ada Generation Laptop GPU, 8188, 595.95, 8.9', tier: '8gb', bundle: 'cuda12.4-sm86-sm89' }
+          - { card: 'GTX 1660 Super 6GB (refused)', gpu: '0, NVIDIA GeForce GTX 1660 SUPER, 6144, 595.95, 7.5', tier: 'none', bundle: 'none' }
+    name: linux ${{ matrix.card }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install for ${{ matrix.card }} the way curl | bash runs it
+        env:
+          BONSAI_FAKE_GPU: ${{ matrix.gpu }}
+          BONSAI_TEST: '1'
+          BONSAI_DIR: ${{ runner.temp }}/bonsai2
+        run: |
+          bash -n install.sh
+          set +e; cat install.sh | bash; rc=$?; set -e
+          if [ '${{ matrix.tier }}' = none ]; then [ $rc -ne 0 ] && [ ! -f "$BONSAI_DIR/start-bonsai.sh" ] && echo 'refused, as it should' && exit 0; echo 'it installed on a card it should refuse'; exit 1; fi
+          [ $rc -eq 0 ] || exit 1
+          bash -n "$BONSAI_DIR/start-bonsai.sh"
+          cat "$BONSAI_DIR/start-bonsai.sh"
+          grep -q '${{ matrix.bundle }}' "$BONSAI_DIR/start-bonsai.sh"
+          grep -q 'draft-mtp' "$BONSAI_DIR/start-bonsai.sh"
+          case '${{ matrix.tier }}' in
+            8gb)  grep -q 'C=65536' "$BONSAI_DIR/start-bonsai.sh" && grep -q 'mtp-lean' "$BONSAI_DIR/start-bonsai.sh" ;;
+            16gb) grep -q -- '--mmproj' "$BONSAI_DIR/start-bonsai.sh" && grep -q -- '--fit on' "$BONSAI_DIR/start-bonsai.sh" ;;
+            12gb) grep -q -- '--fit on' "$BONSAI_DIR/start-bonsai.sh" && ! grep -q -- '--mmproj' "$BONSAI_DIR/start-bonsai.sh" ;;
+          esac
