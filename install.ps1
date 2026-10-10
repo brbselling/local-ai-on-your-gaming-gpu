@@ -74,7 +74,9 @@ function Install-Bonsai2 {
     New-Item -ItemType Directory -Force -Path (Join-Path $dir 'models') | Out-Null
     $root = [IO.Path]::GetPathRoot((Resolve-Path $dir).Path)
     $free = (New-Object IO.DriveInfo $root).AvailableFreeSpace
-    if (-not $test -and $free -lt 10GB) { Write-Host ('Not enough disk space on {0}: about 10 GB is needed, {1:N1} GB is free.' -f $root, ($free / 1GB)) -ForegroundColor Red; return }
+    $skipModel = [bool]$env:BONSAI_SKIP_MODEL   # CI only: the real zip download and unpack, without the 7 GB model
+    $need = if ($skipModel) { 2GB } else { 10GB }
+    if (-not $test -and $free -lt $need) { Write-Host ('Not enough disk space on {0}: about {1:N0} GB is needed, {2:N1} GB is free.' -f $root, ($need / 1GB), ($free / 1GB)) -ForegroundColor Red; return }
 
     function Invoke-Curl([string[]]$curlArgs) {
         $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
@@ -123,8 +125,10 @@ function Install-Bonsai2 {
         } else {
             Write-Host "  ok    $($b.zip) (already unpacked)"
         }
-        Get-Verified "$hf/$model" (Join-Path $dir "models\$model") $sums[$model]
-        if ($vision) { Get-Verified "$prism/$mmproj" (Join-Path $dir "models\$mmproj") $mmprojSha }
+        if (-not $skipModel) {
+            Get-Verified "$hf/$model" (Join-Path $dir "models\$model") $sums[$model]
+            if ($vision) { Get-Verified "$prism/$mmproj" (Join-Path $dir "models\$mmproj") $mmprojSha }
+        }
     }
 
     # 5. the launcher, its settings and the two .bat files

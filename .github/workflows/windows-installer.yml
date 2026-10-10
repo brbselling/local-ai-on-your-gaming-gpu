@@ -122,3 +122,54 @@ jobs:
             16gb) grep -q -- '--mmproj' "$BONSAI_DIR/start-bonsai.sh" && grep -q -- '--fit on' "$BONSAI_DIR/start-bonsai.sh" ;;
             12gb) grep -q -- '--fit on' "$BONSAI_DIR/start-bonsai.sh" && ! grep -q -- '--mmproj' "$BONSAI_DIR/start-bonsai.sh" ;;
           esac
+
+  # The real files on Hugging Face: download, SHA256 check and unpack exactly as a user gets them, minus the 7 GB model.
+  windows-download:
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { card: 'RTX 3060 12GB', gpu: '0, NVIDIA GeForce RTX 3060, 12288, 595.95, 8.6', zip: 'bonsai2-small-gpu-windows-x64-cuda12.4-sm86-sm89-ff41412' }
+          - { card: 'RTX 5060 Ti 16GB', gpu: '0, NVIDIA GeForce RTX 5060 Ti, 16311, 595.95, 12.0', zip: 'bonsai2-small-gpu-windows-x64-cuda13.3-sm120-ff41412' }
+    name: windows download ${{ matrix.card }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Real download from Hugging Face, then start the exe from the installed folder
+        shell: powershell
+        env:
+          BONSAI_FAKE_GPU: ${{ matrix.gpu }}
+          BONSAI_SKIP_MODEL: '1'
+          BONSAI_NO_START: '1'
+          BONSAI_HUB_DIR: ${{ github.workspace }}
+          BONSAI_DIR: ${{ runner.temp }}\bonsai2
+        run: |
+          Get-Content .\install.ps1 -Raw | Invoke-Expression
+          $exe = "$env:BONSAI_DIR\${{ matrix.zip }}\bin\llama-server.exe"
+          if (-not (Test-Path $exe)) { throw "$exe missing after the install" }
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) { throw 'the installed llama-server.exe did not start' }
+          Get-ChildItem "$env:BONSAI_DIR\${{ matrix.zip }}" | Select-Object Name | Out-String | Write-Host
+
+  linux-download:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { card: 'RTX 3060 12GB', gpu: '0, NVIDIA GeForce RTX 3060, 12288, 595.95, 8.6', bundle: 'bonsai2-small-gpu-linux-x64-cuda12.4-sm86-sm89-285542d' }
+          - { card: 'RTX 5060 Ti 16GB', gpu: '0, NVIDIA GeForce RTX 5060 Ti, 16311, 595.95, 12.0', bundle: 'bonsai2-small-gpu-linux-x64-cuda12.8-sm120-ff41412' }
+    name: linux download ${{ matrix.card }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Real download from Hugging Face (no NVIDIA driver here, so the binary is checked, not started)
+        env:
+          BONSAI_FAKE_GPU: ${{ matrix.gpu }}
+          BONSAI_SKIP_MODEL: '1'
+          BONSAI_NO_START: '1'
+          BONSAI_DIR: ${{ runner.temp }}/bonsai2
+        run: |
+          cat install.sh | bash
+          test -x "$BONSAI_DIR/${{ matrix.bundle }}/bin/llama-server"
+          bash -n "$BONSAI_DIR/start-bonsai.sh"
+          file "$BONSAI_DIR/${{ matrix.bundle }}/bin/llama-server"

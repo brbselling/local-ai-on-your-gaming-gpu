@@ -61,8 +61,10 @@ main() {
 
   mkdir -p "$dir"
   if [ -z "$test" ]; then
+    local skip_model="${BONSAI_SKIP_MODEL:-}" need_gb=10   # BONSAI_SKIP_MODEL: CI only, the real bundle download without the model
+    [ -n "$skip_model" ] && need_gb=2
     local free_kb; free_kb=$(df -Pk "$dir" | awk 'NR == 2 { print $4 }')
-    if [ "$free_kb" -lt $((10 * 1024 * 1024)) ]; then echo "Not enough disk space in $dir: about 10 GB is needed."; return 1; fi
+    if [ "$free_kb" -lt $((need_gb * 1024 * 1024)) ]; then echo "Not enough disk space in $dir: about $need_gb GB is needed."; return 1; fi
 
     # 4. downloads, every file checked against its SHA256
     local sums; sums=$(curl -fsSL "$hf/SHA256SUMS")
@@ -83,8 +85,10 @@ main() {
     else
       echo "  ok    $bundle (already unpacked)"
     fi
-    get "$hf/$model" "$dir/$model" "$(want "$model")"
-    [ "$vision" = 1 ] && get "$prism/$mmproj" "$dir/$mmproj" "$mmproj_sha"
+    if [ -z "$skip_model" ]; then
+      get "$hf/$model" "$dir/$model" "$(want "$model")"
+      if [ "$vision" = 1 ]; then get "$prism/$mmproj" "$dir/$mmproj" "$mmproj_sha"; fi
+    fi
   fi
 
   # 5. the start script: --fit sizes the window to free VRAM, 8 GB cards get a window picked from free VRAM
