@@ -1,10 +1,12 @@
 # Checks install.ps1 and windows/bonsai2.ps1 on a real Windows PowerShell 5.1, and install.sh in bash, with fake cards.
 # The runners have no GPU, so the big downloads and the model start are skipped (BONSAI_TEST).
+# AMD Radeon (beta): fake Radeons on both systems (Windows: BONSAI_FAKE_AMD and BONSAI_FAKE_VK, Linux: a fake
+# /sys/class/drm tree and a stand-in llama-server that lists Vulkan devices), and the real PrismML Vulkan builds.
 name: installer check
 
 on:
   push:
-    branches: [main, windows]
+    branches: [main, windows, amd]
     paths: ['install.ps1', 'install.sh', 'windows/**', '.github/workflows/windows-installer.yml']
   pull_request:
     paths: ['install.ps1', 'install.sh', 'windows/**']
@@ -32,12 +34,53 @@ jobs:
             gpu: '0, NVIDIA RTX 3000 Ada Generation Laptop GPU, 8188, 595.95, 8.9'
             tier: '8gb'
             build: 'cuda12.4-sm86-sm89'
+            ctx8: '49152'
           - card: 'GTX 1660 Super 6GB (refused)'
             gpu: '0, NVIDIA GeForce GTX 1660 SUPER, 6144, 595.95, 7.5'
             tier: 'none'
             build: 'none'
           - card: 'RTX 5070 on an old driver (refused)'
             gpu: '0, NVIDIA GeForce RTX 5070, 12227, 572.16, 12.0'
+            tier: 'none'
+            build: 'none'
+          - card: 'Radeon RX 7600 8GB, desktop on it'
+            amd: 'AMD Radeon RX 7600, 8192, 16304, 25.9.1'
+            vk: '  Vulkan0: AMD Radeon RX 7600 (8176 MiB, 7476 MiB free)'
+            tier: '8gb'
+            build: 'win-vulkan'
+            dev: 'Vulkan0'
+            ctx8: '16384'
+          - card: 'Radeon RX 6700 XT 12GB'
+            amd: 'AMD Radeon RX 6700 XT, 12288, 16304, 25.9.1'
+            vk: '  Vulkan0: AMD Radeon RX 6700 XT (12272 MiB, 11500 MiB free)'
+            tier: '12gb'
+            build: 'win-vulkan'
+            dev: 'Vulkan0'
+          - card: 'Radeon RX 7800 XT 16GB'
+            amd: 'AMD Radeon RX 7800 XT, 16384, 16304, 25.9.1'
+            vk: '  Vulkan0: AMD Radeon RX 7800 XT (16368 MiB, 15800 MiB free)'
+            tier: '16gb'
+            build: 'win-vulkan'
+            dev: 'Vulkan0'
+          - card: 'Ryzen iGPU + Radeon RX 7600 desktop'
+            amd: 'AMD Radeon(TM) Graphics, 512, 16304, 25.9.1; AMD Radeon RX 7600, 8192, 16304, 25.9.1'
+            vk: '  Vulkan0: AMD Radeon(TM) Graphics (16816 MiB, 16000 MiB free);  Vulkan1: AMD Radeon RX 7600 (8176 MiB, 7900 MiB free)'
+            tier: '8gb'
+            build: 'win-vulkan'
+            dev: 'Vulkan1'
+            ctx8: '32768'
+          - card: 'Radeon 8060S APU, 128 GB'
+            amd: 'AMD Radeon(TM) 8060S Graphics, 512, 65280, 25.9.1'
+            vk: '  Vulkan0: AMD Radeon(TM) 8060S Graphics (65792 MiB, 64000 MiB free)'
+            tier: '16gb'
+            build: 'win-vulkan'
+            dev: 'Vulkan0'
+          - card: 'Radeon RX 6500 XT 4GB (refused)'
+            amd: 'AMD Radeon RX 6500 XT, 4096, 16304, 25.9.1'
+            tier: 'none'
+            build: 'none'
+          - card: 'Radeon 780M APU on 16 GB of RAM (refused)'
+            amd: 'AMD Radeon(TM) 780M Graphics, 512, 7900, 25.9.1'
             tier: 'none'
             build: 'none'
 
@@ -60,6 +103,8 @@ jobs:
         shell: powershell
         env:
           BONSAI_FAKE_GPU: ${{ matrix.gpu }}
+          BONSAI_FAKE_AMD: ${{ matrix.amd }}
+          BONSAI_FAKE_VK: ${{ matrix.vk }}
           BONSAI_FAKE_FREE: '7900'
           BONSAI_TEST: '1'
           BONSAI_HUB_DIR: ${{ github.workspace }}
@@ -85,9 +130,16 @@ jobs:
           if ($out -notmatch 'draft-mtp') { throw 'print mode shows no draft-mtp line' }
           if ($out -notmatch '--alias bonsai-2-27b') { throw 'agents need the bonsai-2-27b model name' }
           if ($out -notmatch '--host 127.0.0.1') { throw 'it should serve on 127.0.0.1 by default' }
-          if ('${{ matrix.tier }}' -eq '8gb' -and $out -notmatch '-c 49152') { throw '8gb tier at 7900 MiB free should pick -c 49152' }
+          if ('${{ matrix.tier }}' -eq '8gb' -and $out -notmatch '-c ${{ matrix.ctx8 }} ') { throw '8gb tier should pick -c ${{ matrix.ctx8 }} here' }
           if ('${{ matrix.tier }}' -ne '8gb' -and $out -notmatch '--fit on') { throw 'this tier should use --fit on' }
           if ('${{ matrix.tier }}' -eq '16gb' -and $out -notmatch 'mmproj') { throw '16gb tier should load the vision file' }
+          if ('${{ matrix.amd }}' -ne '') {
+            if ($cfg.backend -ne 'vulkan') { throw 'a Radeon should get the Vulkan backend' }
+            if ($out -notmatch '--device ${{ matrix.dev }} ') { throw 'it should run on ${{ matrix.dev }} only' }
+            if ($out -notmatch '--spec-draft-n-max 2') { throw 'Radeon tiers draft 2 tokens' }
+            if ($out -notmatch 'win-vulkan-x64\\llama-server\.exe') { throw 'the Vulkan build has its files in the build folder itself' }
+            if ('${{ matrix.tier }}' -eq '12gb' -and $out -match 'mmproj') { throw '12gb tier should not load the vision file' }
+          }
 
   linux:
     runs-on: ubuntu-24.04
@@ -99,12 +151,43 @@ jobs:
           - { card: 'RTX 5060 Ti 16GB', gpu: '0, NVIDIA GeForce RTX 5060 Ti, 16311, 595.95, 12.0', tier: '16gb', bundle: 'cuda12.8-sm120' }
           - { card: 'RTX 3000 Ada Laptop 8GB', gpu: '0, NVIDIA RTX 3000 Ada Generation Laptop GPU, 8188, 595.95, 8.9', tier: '8gb', bundle: 'cuda12.4-sm86-sm89' }
           - { card: 'GTX 1660 Super 6GB (refused)', gpu: '0, NVIDIA GeForce GTX 1660 SUPER, 6144, 595.95, 7.5', tier: 'none', bundle: 'none' }
+          # Radeons: drm = 'cardN vendor VRAM-MiB GTT-MiB name' per card, vk = what the Vulkan build lists at start
+          - { card: 'Radeon RX 7600 8GB, desktop on it', drm: 'card1 0x1002 8176 15000 AMD Radeon RX 7600',
+              vk: '  Vulkan0: AMD Radeon RX 7600 (RADV NAVI33) (8176 MiB, 7476 MiB free)', tier: '8gb', dev: 'Vulkan0', ctx8: '16384' }
+          - { card: 'Radeon RX 6700 XT 12GB', drm: 'card1 0x1002 12272 15000 AMD Radeon RX 6700 XT',
+              vk: '  Vulkan0: AMD Radeon RX 6700 XT (RADV NAVY_FLOUNDER) (12272 MiB, 11500 MiB free)', tier: '12gb', dev: 'Vulkan0' }
+          - { card: 'Radeon RX 7800 XT 16GB', drm: 'card1 0x1002 16368 15000 AMD Radeon RX 7800 XT',
+              vk: '  Vulkan0: AMD Radeon RX 7800 XT (RADV NAVI32) (16368 MiB, 15800 MiB free)', tier: '16gb', dev: 'Vulkan0' }
+          - { card: 'Ryzen iGPU + Radeon RX 7600 desktop, an NVIDIA entry too',
+              drm: 'card0 0x1002 512 15000 AMD Radeon Graphics;card1 0x1002 8176 15000 AMD Radeon RX 7600;card2 0x10de 12288 0 NVIDIA',
+              vk: '  Vulkan0: AMD Radeon Graphics (RADV RAPHAEL_MENDOCINO) (15512 MiB, 15000 MiB free);  Vulkan1: AMD Radeon RX 7600 (RADV NAVI33) (8176 MiB, 8160 MiB free)',
+              tier: '8gb', dev: 'Vulkan1', ctx8: '49152' }
+          - { card: 'Radeon 8060S APU, 128 GB', drm: 'card1 0x1002 512 117760 AMD Radeon 8060S Graphics',
+              vk: '  Vulkan0: AMD Radeon Graphics (RADV GFX1151) (118272 MiB, 116000 MiB free)', tier: '16gb', dev: 'Vulkan0' }
+          - { card: 'Radeon RX 6500 XT 4GB (refused)', drm: 'card1 0x1002 4080 15000 AMD Radeon RX 6500 XT', tier: 'none' }
+          - { card: 'Radeon 780M APU on 16 GB of RAM (refused)', drm: 'card1 0x1002 512 7800 AMD Radeon 780M Graphics', tier: 'none' }
+          - { card: 'Radeon RX 7600 without Vulkan (refused)', drm: 'card1 0x1002 8176 15000 AMD Radeon RX 7600', icd: '/nonexistent', tier: 'none' }
     name: linux ${{ matrix.card }}
     steps:
       - uses: actions/checkout@v4
+      - name: A fake Radeon in /sys/class/drm, and Mesa's Vulkan driver
+        if: matrix.drm != ''
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends mesa-vulkan-drivers libvulkan1 >/dev/null
+          ls /usr/share/vulkan/icd.d/
+          IFS=';' read -ra cards <<< '${{ matrix.drm }}'
+          for c in "${cards[@]}"; do
+            read -r card vendor vram gtt name <<< "$c"
+            d="$RUNNER_TEMP/drm/$card/device"; mkdir -p "$d" "$RUNNER_TEMP/drm/$card-DP-1"
+            echo "$vendor" > "$d/vendor"; echo $((vram * 1048576)) > "$d/mem_info_vram_total"; echo $((gtt * 1048576)) > "$d/mem_info_gtt_total"
+            echo "$name" > "$d/product_name"
+          done
+          find "$RUNNER_TEMP/drm" | sort
       - name: Install for ${{ matrix.card }} the way curl | bash runs it
         env:
           BONSAI_FAKE_GPU: ${{ matrix.gpu }}
+          BONSAI_DRM: ${{ runner.temp }}/drm
+          BONSAI_VK_ICD_DIR: ${{ matrix.icd }}
           BONSAI_TEST: '1'
           BONSAI_DIR: ${{ runner.temp }}/bonsai2
         run: |
@@ -114,38 +197,63 @@ jobs:
           [ $rc -eq 0 ] || exit 1
           bash -n "$BONSAI_DIR/start-bonsai.sh"
           cat "$BONSAI_DIR/start-bonsai.sh"
-          grep -q '${{ matrix.bundle }}' "$BONSAI_DIR/start-bonsai.sh"
           grep -q 'draft-mtp' "$BONSAI_DIR/start-bonsai.sh"
           grep -q -- '--alias bonsai-2-27b' "$BONSAI_DIR/start-bonsai.sh"
-          case '${{ matrix.tier }}' in
-            8gb)  grep -q 'C=65536' "$BONSAI_DIR/start-bonsai.sh" && grep -q 'mtp-lean' "$BONSAI_DIR/start-bonsai.sh" ;;
-            16gb) grep -q -- '--mmproj' "$BONSAI_DIR/start-bonsai.sh" && grep -q -- '--fit on' "$BONSAI_DIR/start-bonsai.sh" ;;
-            12gb) grep -q -- '--fit on' "$BONSAI_DIR/start-bonsai.sh" && ! grep -q -- '--mmproj' "$BONSAI_DIR/start-bonsai.sh" ;;
-          esac
+          if [ -z '${{ matrix.drm }}' ]; then
+            grep -q '${{ matrix.bundle }}' "$BONSAI_DIR/start-bonsai.sh"
+            case '${{ matrix.tier }}' in
+              8gb)  grep -q 'C=65536' "$BONSAI_DIR/start-bonsai.sh" && grep -q 'mtp-lean' "$BONSAI_DIR/start-bonsai.sh" ;;
+              16gb) grep -q -- '--mmproj' "$BONSAI_DIR/start-bonsai.sh" && grep -q -- '--fit on' "$BONSAI_DIR/start-bonsai.sh" ;;
+              12gb) grep -q -- '--fit on' "$BONSAI_DIR/start-bonsai.sh" && ! grep -q -- '--mmproj' "$BONSAI_DIR/start-bonsai.sh" ;;
+            esac
+          else
+            # Radeon: the start script against a stand-in llama-server that lists the Vulkan devices and prints its arguments
+            grep -q 'TIER=${{ matrix.tier }} ' "$BONSAI_DIR/start-bonsai.sh"
+            B="$BONSAI_DIR/llama-prism-b10772-e8fd209-bin-ubuntu-vulkan-x64"; mkdir -p "$B"
+            printf '%s\n' '#!/bin/bash' \
+              'if [ "${1:-}" = --list-devices ]; then echo "Available devices:"; tr ";" "\n" <<< "$FAKE_VK"; exit 0; fi' \
+              'echo "SERVER ARGS: $*"' > "$B/llama-server"
+            chmod +x "$B/llama-server"
+            out=$(FAKE_VK='${{ matrix.vk }}' bash "$BONSAI_DIR/start-bonsai.sh"); echo "$out"
+            args=$(grep '^SERVER ARGS:' <<< "$out")
+            grep -q -- '--device ${{ matrix.dev }} ' <<< "$args"
+            grep -q -- '--spec-draft-n-max 2' <<< "$args"
+            case '${{ matrix.tier }}' in
+              8gb)  grep -q -- '-c ${{ matrix.ctx8 }} --fit off' <<< "$args" && grep -q 'mtp-lean' <<< "$args" ;;
+              16gb) grep -q -- '--mmproj' <<< "$args" && grep -q -- '--fit on' <<< "$args" ;;
+              12gb) grep -q -- '--fit on' <<< "$args" && ! grep -q -- '--mmproj' <<< "$args" ;;
+            esac
+          fi
 
-  # The real files on Hugging Face: download, SHA256 check and unpack exactly as a user gets them, minus the 7 GB model.
+  # The real files: download, SHA256 check and unpack exactly as a user gets them, minus the 7 GB model. NVIDIA builds come
+  # from Hugging Face, the Radeon builds from PrismML's GitHub release.
   windows-download:
     runs-on: windows-2022
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { card: 'RTX 3060 12GB', gpu: '0, NVIDIA GeForce RTX 3060, 12288, 595.95, 8.6', zip: 'bonsai2-small-gpu-windows-x64-cuda12.4-sm86-sm89-ff41412' }
-          - { card: 'RTX 5060 Ti 16GB', gpu: '0, NVIDIA GeForce RTX 5060 Ti, 16311, 595.95, 12.0', zip: 'bonsai2-small-gpu-windows-x64-cuda13.3-sm120-ff41412' }
+          - { card: 'RTX 3060 12GB', gpu: '0, NVIDIA GeForce RTX 3060, 12288, 595.95, 8.6', zip: 'bonsai2-small-gpu-windows-x64-cuda12.4-sm86-sm89-ff41412',
+              exe: 'bonsai2-small-gpu-windows-x64-cuda12.4-sm86-sm89-ff41412\bin\llama-server.exe' }
+          - { card: 'RTX 5060 Ti 16GB', gpu: '0, NVIDIA GeForce RTX 5060 Ti, 16311, 595.95, 12.0', zip: 'bonsai2-small-gpu-windows-x64-cuda13.3-sm120-ff41412',
+              exe: 'bonsai2-small-gpu-windows-x64-cuda13.3-sm120-ff41412\bin\llama-server.exe' }
+          - { card: 'Radeon RX 7600 8GB', amd: 'AMD Radeon RX 7600, 8192, 16304, 25.9.1', zip: 'llama-prism-b10772-e8fd209-bin-win-vulkan-x64',
+              exe: 'llama-prism-b10772-e8fd209-bin-win-vulkan-x64\llama-server.exe' }
     name: windows download ${{ matrix.card }}
     steps:
       - uses: actions/checkout@v4
-      - name: Real download from Hugging Face, then start the exe from the installed folder
+      - name: Real download, then start the exe from the installed folder
         shell: powershell
         env:
           BONSAI_FAKE_GPU: ${{ matrix.gpu }}
+          BONSAI_FAKE_AMD: ${{ matrix.amd }}
           BONSAI_SKIP_MODEL: '1'
           BONSAI_NO_START: '1'
           BONSAI_HUB_DIR: ${{ github.workspace }}
           BONSAI_DIR: ${{ runner.temp }}\bonsai2
         run: |
           Get-Content .\install.ps1 -Raw | Invoke-Expression
-          $exe = "$env:BONSAI_DIR\${{ matrix.zip }}\bin\llama-server.exe"
+          $exe = "$env:BONSAI_DIR\${{ matrix.exe }}"
           if (-not (Test-Path $exe)) { throw "$exe missing after the install" }
           & $exe --version
           if ($LASTEXITCODE -ne 0) { throw 'the installed llama-server.exe did not start' }
@@ -157,19 +265,102 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { card: 'RTX 3060 12GB', gpu: '0, NVIDIA GeForce RTX 3060, 12288, 595.95, 8.6', bundle: 'bonsai2-small-gpu-linux-x64-cuda12.4-sm86-sm89-285542d' }
-          - { card: 'RTX 5060 Ti 16GB', gpu: '0, NVIDIA GeForce RTX 5060 Ti, 16311, 595.95, 12.0', bundle: 'bonsai2-small-gpu-linux-x64-cuda12.8-sm120-ff41412' }
+          - { card: 'RTX 3060 12GB', gpu: '0, NVIDIA GeForce RTX 3060, 12288, 595.95, 8.6', bundle: 'bonsai2-small-gpu-linux-x64-cuda12.4-sm86-sm89-285542d', server: 'bin/llama-server' }
+          - { card: 'RTX 5060 Ti 16GB', gpu: '0, NVIDIA GeForce RTX 5060 Ti, 16311, 595.95, 12.0', bundle: 'bonsai2-small-gpu-linux-x64-cuda12.8-sm120-ff41412', server: 'bin/llama-server' }
+          - { card: 'Radeon RX 7600 8GB', drm: 'card1 0x1002 8176 15000 AMD Radeon RX 7600', bundle: 'llama-prism-b10772-e8fd209-bin-ubuntu-vulkan-x64', server: 'llama-server' }
     name: linux download ${{ matrix.card }}
     steps:
       - uses: actions/checkout@v4
-      - name: Real download from Hugging Face (no NVIDIA driver here, so the binary is checked, not started)
+      - name: A fake Radeon in /sys/class/drm, and Mesa's Vulkan driver
+        if: matrix.drm != ''
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends mesa-vulkan-drivers libvulkan1 >/dev/null
+          read -r card vendor vram gtt name <<< '${{ matrix.drm }}'
+          d="$RUNNER_TEMP/drm/$card/device"; mkdir -p "$d"
+          echo "$vendor" > "$d/vendor"; echo $((vram * 1048576)) > "$d/mem_info_vram_total"; echo $((gtt * 1048576)) > "$d/mem_info_gtt_total"
+          echo "$name" > "$d/product_name"
+      - name: Real download (no GPU here, so the binary is checked, not started on a card)
         env:
           BONSAI_FAKE_GPU: ${{ matrix.gpu }}
+          BONSAI_DRM: ${{ runner.temp }}/drm
           BONSAI_SKIP_MODEL: '1'
           BONSAI_NO_START: '1'
           BONSAI_DIR: ${{ runner.temp }}/bonsai2
         run: |
           cat install.sh | bash
-          test -x "$BONSAI_DIR/${{ matrix.bundle }}/bin/llama-server"
+          test -x "$BONSAI_DIR/${{ matrix.bundle }}/${{ matrix.server }}"
           bash -n "$BONSAI_DIR/start-bonsai.sh"
-          file "$BONSAI_DIR/${{ matrix.bundle }}/bin/llama-server"
+          file "$BONSAI_DIR/${{ matrix.bundle }}/${{ matrix.server }}"
+          if [ -n '${{ matrix.drm }}' ]; then "$BONSAI_DIR/${{ matrix.bundle }}/llama-server" --version; fi
+
+  # The Radeon support must not change a byte of what NVIDIA owners get: the same fake NVIDIA cards (and no card at all)
+  # through main's installers and this branch's, the console output and every written file compared byte for byte.
+  nvidia-unchanged:
+    runs-on: windows-2022
+    name: NVIDIA output unchanged from main, Windows
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: The same cards through main and this branch
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          git worktree add "$env:RUNNER_TEMP\main" origin/main 2>&1 | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'git worktree add failed' }
+          $ErrorActionPreference = 'Stop'
+          $cards = @('0, NVIDIA GeForce RTX 3060, 12288, 595.95, 8.6', '0, NVIDIA GeForce RTX 5060 Ti, 16311, 595.95, 12.0',
+                     '0, NVIDIA RTX 3000 Ada Generation Laptop GPU, 8188, 595.95, 8.9', '0, NVIDIA GeForce GTX 1660 SUPER, 6144, 595.95, 7.5',
+                     '0, NVIDIA GeForce RTX 5070, 12227, 572.16, 12.0', '')
+          $env:BONSAI_TEST = '1'; $env:BONSAI_FAKE_FREE = '7900'
+          $bad = 0
+          foreach ($card in $cards) {
+            $got = @{}
+            foreach ($side in 'main', 'branch') {
+              $hub = if ($side -eq 'main') { "$env:RUNNER_TEMP\main" } else { $env:GITHUB_WORKSPACE }
+              $d = "$env:RUNNER_TEMP\nv"
+              $env:BONSAI_DIR = $d; $env:BONSAI_HUB_DIR = $hub; $env:BONSAI_FAKE_GPU = $card
+              $text = & { Get-Content "$hub\install.ps1" -Raw | Invoke-Expression } *>&1 | Out-String
+              foreach ($f in 'bonsai2.json', 'start-bonsai.bat', 'bench-bonsai.bat') { if (Test-Path "$d\$f") { $text += [IO.File]::ReadAllText("$d\$f") } }
+              if (Test-Path "$d\bonsai2.ps1") { $text += (powershell -NoProfile -ExecutionPolicy Bypass -File "$d\bonsai2.ps1" print | Out-String) }
+              $got[$side] = $text
+              if (Test-Path $d) { Rename-Item $d "nv-$side-$([array]::IndexOf($cards, $card))" }
+            }
+            $name = if ($card) { $card } else { 'no NVIDIA card, no Radeon' }
+            if ($got['main'] -ceq $got['branch']) { Write-Host "same: $name" }
+            else { $bad++; Write-Host "DIFFERENT: $name"; Write-Host '--- main'; Write-Host $got['main']; Write-Host '--- branch'; Write-Host $got['branch'] }
+          }
+          if ($bad) { throw "$bad NVIDIA cases changed" }
+
+  nvidia-unchanged-linux:
+    runs-on: ubuntu-24.04
+    name: NVIDIA output unchanged from main, Linux
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: The same cards through main and this branch
+        run: |
+          git show origin/main:install.sh > "$RUNNER_TEMP/install_main.sh"
+          cp install.sh "$RUNNER_TEMP/install_branch.sh"
+          bad=0; n=0
+          while IFS= read -r card; do
+            n=$((n + 1))
+            for side in main branch; do
+              d="$RUNNER_TEMP/nv"
+              out=$(BONSAI_FAKE_GPU="$card" BONSAI_TEST=1 BONSAI_DIR="$d" bash "$RUNNER_TEMP/install_$side.sh" 2>&1; echo "rc=$?")
+              [ -f "$d/start-bonsai.sh" ] && out="$out$(cat "$d/start-bonsai.sh")"
+              printf '%s' "$out" > "$RUNNER_TEMP/out_$side"
+              [ -d "$d" ] && mv "$d" "$RUNNER_TEMP/nv-$side-$n"
+            done
+            if cmp -s "$RUNNER_TEMP/out_main" "$RUNNER_TEMP/out_branch"; then echo "same: ${card:-no NVIDIA card, no Radeon}"
+            else bad=$((bad + 1)); echo "DIFFERENT: $card"; diff "$RUNNER_TEMP/out_main" "$RUNNER_TEMP/out_branch" || true; fi
+          done <<'CARDS'
+          0, NVIDIA GeForce RTX 3060, 12288, 595.95, 8.6
+          0, NVIDIA GeForce RTX 5060 Ti, 16311, 595.95, 12.0
+          0, NVIDIA RTX 3000 Ada Generation Laptop GPU, 8188, 595.95, 8.9
+          0, NVIDIA GeForce GTX 1660 SUPER, 6144, 595.95, 7.5
+          0, NVIDIA GeForce RTX 5070, 12227, 572.16, 12.0
+
+          CARDS
+          [ "$bad" -eq 0 ]
