@@ -13,10 +13,56 @@ $cfg  = Get-Content (Join-Path $here 'bonsai2.json') -Raw | ConvertFrom-Json
 $exe  = Join-Path $here "$($cfg.build)\bin\llama-server.exe"
 $smi  = "$env:SystemRoot\System32\nvidia-smi.exe"
 if (-not (Test-Path $smi)) { $c = Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue; if ($c) { $smi = $c.Source } }
+# AMD Radeon (beta): PrismML's Vulkan build, its files sit in the build folder itself, and there is no nvidia-smi
+$vulkan = $cfg.backend -eq 'vulkan'
 
-$env:CUDA_DEVICE_ORDER = 'PCI_BUS_ID'
-$env:CUDA_VISIBLE_DEVICES = "$($cfg.gpuIndex)"
-$env:GGML_CUDA_BATCH_INVARIANT = '1'
+if ($vulkan) {
+    $exe = Join-Path $here "$($cfg.build)\llama-server.exe"
+} else {
+    $env:CUDA_DEVICE_ORDER = 'PCI_BUS_ID'
+    $env:CUDA_VISIBLE_DEVICES = "$($cfg.gpuIndex)"
+    $env:GGML_CUDA_BATCH_INVARIANT = '1'
+}
+
+# AMD: the Vulkan device of this Radeon, found by its memory (an APU: the biggest one) so the model never lands on an
+# integrated GPU, with the free memory Vulkan reports for it. CI: BONSAI_FAKE_VK = the --list-devices lines, ';' between.
+function Get-VkDevice {
+    if ($env:BONSAI_FAKE_VK) { $lines = @($env:BONSAI_FAKE_VK -split ';') }
+    else {
+        $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        $lines = @(& $exe --list-devices 2>$null | ForEach-Object { "$_" })
+        $ErrorActionPreference = $old
+    }
+    $best = $null
+    foreach ($l in $lines) {
+        if ($l -notmatch '^\s*(Vulkan\d+):\s*(.*)\((\d+) MiB, (\d+) MiB free\)\s*$') { continue }
+        $name = $Matches[1]; $desc = $Matches[2].Trim(); $total = [int]$Matches[3]; $free = [int]$Matches[4]
+        $d = [pscustomobject]@{ Name = $name; Desc = $desc; Total = $total; Free = $free; Amd = [int]($desc -match 'AMD|Radeon')
+                                Score = $(if ($cfg.apu) { -$total } else { [math]::Abs($total - [int]$cfg.gpuMiB) }) }
+        if (-not $best -or $d.Amd -gt $best.Amd -or ($d.Amd -eq $best.Amd -and $d.Score -lt $best.Score)) { $best = $d }
+    }
+    return $best
+}
+$script:vk = $null
+function Get-Vk {
+    if (-not $script:vk) {
+        $script:vk = Get-VkDevice
+        if (-not $script:vk) { throw 'No Vulkan device found. Update the AMD Adrenalin driver (it brings Vulkan), then try again.' }
+    }
+    return $script:vk
+}
+
+# AMD: dedicated memory in use per GPU from the GPU Adapter Memory counters (no nvidia-smi on a Radeon); the bench takes the
+# adapter that grows the most when the model loads. No counters: n/a.
+function Get-AdapterUse {
+    $h = @{}
+    try {
+        foreach ($i in @(Get-CimInstance Win32_PerfFormattedData_GPUPerformanceCounters_GPUAdapterMemory -ErrorAction Stop)) {
+            $h["$($i.Name)"] = [int]([double]$i.DedicatedUsage / 1MB)
+        }
+    } catch { }
+    return $h
+}
 
 function Get-VramMiB([string]$field) {
     if ($env:BONSAI_FAKE_FREE -and $field -eq 'memory.free') { return [int]$env:BONSAI_FAKE_FREE }
@@ -27,6 +73,15 @@ function Get-VramMiB([string]$field) {
 # 8 GB cards: --fit is too careful with the lean file (it stops at 16K), so pick the window from free VRAM.
 # The lean file with the head uses about 7,150 MiB at 16K and 7,900 MiB at 64K (sweeps/rtx3000Ada-8gb.md).
 function Get-Context8gb {
+    if ($vulkan) {
+        # lean file with the head (n-max 2) on Vulkan, measured on a Radeon 8060S budgeted as an 8 GB card, all of the
+        # server's memory counted: about 7,265 MiB at 16K, 7,680 at 32K, 8,098 at 48K, 8,488 at 64K
+        $free = (Get-Vk).Free
+        if ($free -ge 8550) { return 65536 }
+        if ($free -ge 8150) { return 49152 }
+        if ($free -ge 7750) { return 32768 }
+        return 16384
+    }
     $free = Get-VramMiB 'memory.free'
     if ($free -ge 7950) { return 65536 }
     if ($free -ge 7700) { return 49152 }
@@ -41,6 +96,7 @@ function Get-ServerArgs([int]$port, [bool]$head, [bool]$chat) {
            '--alias', 'bonsai-2-27b', '--host', $bindHost, '--port', "$port")
     if ($chat -and $env:BONSAI_API_KEY) { $a += @('--api-key', $env:BONSAI_API_KEY) }
     if ($cfg.mmproj) { $a += @('--mmproj', (Join-Path $here "models\$($cfg.mmproj)")) }
+    if ($vulkan) { $a += @('--device', (Get-Vk).Name) }
     if ($cfg.tier -eq '8gb') { $a += @('-c', "$(Get-Context8gb)", '--fit', 'off') }
     else { $a += @('--fit', 'on', '--fit-target', '1024', '--fit-ctx', '16384') }
     if ($head) { $a += @('--spec-type', 'draft-mtp', '--spec-draft-n-max', "$($cfg.nmax)") }
@@ -67,6 +123,7 @@ if ($Mode -eq 'start') {
         Start-Process "http://127.0.0.1:$port"
         return
     }
+    if ($vulkan) { $d = Get-Vk; Write-Host ('Radeon:          {0}, {1}, {2} MiB free (AMD Radeon beta, Vulkan)' -f $d.Name, $d.Desc, $d.Free) }
     Write-Host 'Bonsai 2 27B is loading, the chat page opens in your browser when it is ready.' -ForegroundColor Cyan
     Write-Host "Chat page:       http://127.0.0.1:$port"
     Write-Host "API for agents:  http://127.0.0.1:$port/v1  (OpenAI compatible, model bonsai-2-27b, any API key unless you set BONSAI_API_KEY)"
@@ -129,7 +186,7 @@ $visionMsg = @(@{ role = 'user'; content = @(
     @{ type = 'image_url'; image_url = @{ url = "data:image/png;base64,$img" } },
     @{ type = 'text'; text = "This chart has a group called 'fresh chat' with three bars. Give the three tok/s values as JSON with keys stock, kernel, kernel_plus_head. Only the JSON." }) })
 
-$before = Get-VramMiB 'memory.used'
+if ($vulkan) { $null = Get-Vk; $before = Get-AdapterUse } else { $before = Get-VramMiB 'memory.used' }
 $res = @{}
 $p = $null
 try {
@@ -138,14 +195,14 @@ try {
         Write-Host "Loading with the speed head $tag..."
         $p = Start-Server $head
         $ctx = (Invoke-RestMethod "$base/props").default_generation_settings.n_ctx
-        $loaded = Get-VramMiB 'memory.used'
+        $loaded = if ($vulkan) { Get-AdapterUse } else { Get-VramMiB 'memory.used' }
         Write-Host '  identity run'
         $id = Ask @(@{ role = 'user'; content = $identity }) 400
         $runs = @()
         foreach ($k in 1..3) { Write-Host "  speed run $k of 3"; $runs += Ask @(@{ role = 'user'; content = $speed }) 512 }
         $vis = $null
         if ($head -and $cfg.mmproj) { Write-Host '  vision check'; $vis = Ask $visionMsg 200 }
-        $after = Get-VramMiB 'memory.used'
+        $after = if ($vulkan) { Get-AdapterUse } else { Get-VramMiB 'memory.used' }
         $res[$tag] = @{ ctx = $ctx; loaded = $loaded; after = $after; id = $id; runs = $runs; vis = $vis }
         Stop-Server $p
         $p = $null
@@ -155,6 +212,13 @@ try {
 }
 
 $on = $res['on']; $off = $res['off']
+if ($vulkan) {
+    # the Radeon is the adapter whose dedicated memory grew the most when the model loaded with the head
+    $key = $null; $grow = 0
+    foreach ($k in @($on.loaded.Keys)) { if ($before.ContainsKey($k) -and ($on.loaded[$k] - $before[$k]) -gt $grow) { $grow = $on.loaded[$k] - $before[$k]; $key = $k } }
+    if ($key) { $before = $before[$key]; foreach ($r in @($on, $off)) { $r.loaded = $r.loaded[$key]; $r.after = $r.after[$key] } }
+    else { $before = 'n/a'; foreach ($r in @($on, $off)) { $r.loaded = 'n/a'; $r.after = 'n/a' } }
+}
 $onT = @($on.runs | ForEach-Object { $_.TokS }); $offT = @($off.runs | ForEach-Object { $_.TokS })
 $mOn = Get-Median $onT; $mOff = Get-Median $offT
 $gain = [math]::Round(($mOn / $mOff - 1) * 100)
@@ -185,7 +249,13 @@ if ($on.vis) {
     $verdict = if ($hits -eq 3) { 'read right' } else { 'missed, it answered: ' + $on.vis.Text.Trim() }
     $lines += "vision check (fresh chat bars 25.0 / 39.8 / 50.1): $verdict"
 }
+if ($vulkan) {
+    $vkd = Get-Vk
+    $lines += "radeon: AMD Radeon beta, Vulkan device $($vkd.Name) ($($vkd.Desc), $($vkd.Total) MiB, $($vkd.Free) MiB free before the runs), vram from the GPU Adapter Memory counters"
+    $lines += 'greedy text on Vulkan: no batch-invariant mode, so a different text with and without the head is expected'
+}
 $text = $lines -join "`r`n"
+if ($vulkan) { $text = $text -replace 'n/a MiB', 'n/a' }
 $file = Join-Path $here ('bonsai2-results-{0}.txt' -f (Get-Date -Format 'yyyyMMdd-HHmm'))
 Set-Content -Path $file -Value $text -Encoding ASCII
 try { Set-Clipboard -Value $text } catch { }
