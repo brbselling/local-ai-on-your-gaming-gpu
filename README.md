@@ -15,6 +15,8 @@ Linux or WSL2:
 curl -fsSL https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-rtx/main/install.sh | bash
 ```
 
+AMD Radeon with 8 GB or more, and Ryzen APUs like Strix Halo: the same two lines, in beta, see [Radeon (beta)](#radeon-beta).
+
 It finds your card, downloads the right build and model from Hugging Face (about 8 GB, every file checked against
 its SHA256) and starts it. Chat in your browser at `http://127.0.0.1:8899`, or point any agent at
 `http://127.0.0.1:8899/v1` (OpenAI compatible, model `bonsai-2-27b`). On Windows a desktop shortcut starts it again
@@ -180,6 +182,47 @@ No Sysmem Fallback, so an overflow fails instead of silently spilling into syste
 WSL2 still works: update the NVIDIA driver on Windows and do not install a Linux driver inside WSL,
 `wsl --install -d Ubuntu-24.04`, check that `nvidia-smi` inside WSL shows the card, keep the model files in `~/`
 (not `/mnt/c`, which is much slower for multi-GB files), then run the Linux line.
+
+## Radeon (beta)
+
+The same two lines install on an AMD Radeon when there is no NVIDIA card: Radeon cards with 8 GB or more (the RX 6000,
+7000 and 9000 series are the target, none of them measured yet) and Ryzen APUs with more than 16 GB of shared memory
+(Strix Halo class). It runs on Vulkan, with PrismML's own build of
+the same fork (release `prism-b10772-e8fd209`, Linux and Windows x64, pinned to its SHA256 and downloaded from PrismML's
+GitHub release), the same model files and the same MTP head. Our CUDA decode kernel is NVIDIA only, Vulkan has PrismML's
+own PTQ1_0 shader.
+
+What it picks: 16 GB and up, and APUs, the MTP file with vision and `--fit`; 12 GB the MTP file and `--fit`; 8 and
+10 GB the lean MTP file with a window picked from the free memory Vulkan reports; under 8 GB it stops and says why. The
+head drafts 2 tokens on every Radeon tier (`--spec-draft-n-max 2` was 15 to 16% faster than 1 on Vulkan). The start
+script finds the Radeon among the Vulkan devices by its memory every time and passes `--device`, so a desktop with a
+Ryzen iGPU and a Radeon never splits the model onto the iGPU.
+
+What you need: on Windows the AMD Adrenalin driver (it brings Vulkan) and the Microsoft Visual C++ Redistributable x64
+(most gaming PCs have it, the installer checks and links it); on Linux Mesa's RADV driver
+(`sudo apt install mesa-vulkan-drivers libvulkan1`) and glibc 2.34 or newer (Ubuntu 22.04 or newer). On Windows use the
+PowerShell line, not WSL2.
+
+Measured so far on one machine: a Radeon 8060S, the Strix Halo APU (40 CUs, about 256 GB/s, 128 GB unified memory), on
+Linux with Mesa 25.2.8, budgeted as an 8 GB and a 12 GB card by measuring what the server really allocates. It is an
+APU, not a desktop card, so these are not RX 7600 or RX 6700 XT numbers. Greedy decode, 3 x 512 tokens, median:
+
+| run as | file | window | head on (n-max 2) | head off | server memory, peak |
+| --- | --- | --- | ---: | ---: | ---: |
+| 8 GB card | lean MTP | 16,384 (a desktop on the card) | 45.6 tok/s | 26.2 tok/s | 7,265 MiB |
+| 8 GB card | lean MTP | 32,768 (no desktop on it) | 45.7 tok/s | 26.2 tok/s | 7,680 MiB |
+| 12 GB card | MTP | `--fit` picks 158,208 | 47.1 tok/s | 26.3 tok/s (`--fit` picks 262,144) | 11,458 MiB |
+| APU, 16 GB tier | MTP + vision | `--fit` picks 262,144 | 46.6 tok/s | 26.2 tok/s | 15,082 MiB |
+
+Server memory counts everything the server allocated (on the 8 GB rows with a 12,842-token prompt in the run),
+including 340 to 810 MiB of host-side buffers that a discrete card keeps in system RAM, so the 8 GB windows are on the
+safe side. The vision check reads the chart right. On Vulkan the greedy text with the head is not the same as without it, there
+is no batch-invariant mode like `GGML_CUDA_BATCH_INVARIANT` on CUDA: on our identity prompt the two agree for the first
+1,040 of 1,131 characters, then a near tie flips one token.
+
+Own a Radeon? Run it and send your row: on Windows `bench-bonsai.bat` prints it and copies it, on Linux the row format
+in `sweeps/` (decode with and without the head, the window, the memory, the driver). 8 GB cards (RX 7600, 6600, 6650 XT)
+first: a real card will show how much of the safety margin the 8 GB windows can give back.
 
 ## Changelog
 
