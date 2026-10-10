@@ -1,8 +1,8 @@
 # Bonsai 2 27B on Windows: start the model, or check its speed.
-#   start-bonsai.bat  runs  bonsai2.ps1 start   the chat page at http://127.0.0.1:8080
+#   start-bonsai.bat  runs  bonsai2.ps1 start   the chat page at http://127.0.0.1:8899
 #   bench-bonsai.bat  runs  bonsai2.ps1 bench   a results block, saved next to this file and copied to the clipboard
 #   bonsai2.ps1 print                           shows the server command lines and changes nothing
-# install.ps1 from github.com/sudoingX/bonsai2-small-gpu puts this file here, with its settings in bonsai2.json.
+# install.ps1 from github.com/sudoingX/local-ai-on-your-gaming-rtx puts this file here, with its settings in bonsai2.json.
 param([string]$Mode = 'start')
 
 $ErrorActionPreference = 'Stop'
@@ -193,4 +193,4 @@ Write-Host ''
 Write-Host $text
 Write-Host ''
 Write-Host "Saved to $file and copied to your clipboard." -ForegroundColor Green
-Write-Host 'Share it: paste it in a reply to @sudoingX, or open a pull request with your row at github.com/sudoingX/bonsai2-small-gpu'
+Write-Host 'Share it: paste it in a reply to @sudoingX, or open a pull request with your row at github.com/sudoingX/local-ai-on-your-gaming-rtx'

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Bonsai 2 27B on Linux or WSL2, one line:
-#   curl -fsSL https://raw.githubusercontent.com/sudoingX/bonsai2-small-gpu/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-rtx/main/install.sh | bash
 # It finds your NVIDIA card, picks the prebuilt bundle and the model file for its VRAM, downloads them
 # from Hugging Face, checks every SHA256, writes start-bonsai.sh next to them and starts it.
-# Optional: BONSAI_DIR (default ~/models/bonsai2-27b), BONSAI_PORT (default 8080), BONSAI_NO_START=1.
+# Optional: BONSAI_DIR (default ~/models/bonsai2-27b), BONSAI_PORT (default 8899), BONSAI_NO_START=1.
 set -euo pipefail
 
 main() {
-  local dir="${BONSAI_DIR:-$HOME/models/bonsai2-27b}" port="${BONSAI_PORT:-8080}"
+  local dir="${BONSAI_DIR:-$HOME/models/bonsai2-27b}" port="${BONSAI_PORT:-8899}"
   local hf=https://huggingface.co/sudoingx/Ternary-Bonsai-2-27B-PTQ1_0-MTP-GGUF/resolve/main
   local prism=https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf/resolve/main
   local mmproj=Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf
@@ -16,7 +16,7 @@ main() {
 
   echo
   echo "Bonsai 2 27B for small GPUs, Linux installer"
-  echo "github.com/sudoingX/bonsai2-small-gpu"
+  echo "github.com/sudoingX/local-ai-on-your-gaming-rtx"
   echo
 
   # 1. the card (the one with the most VRAM if there are several)
@@ -32,11 +32,11 @@ main() {
   echo "Card:   $name, $mib MiB, driver $driver"
 
   # 2. the bundle for this card
-  local bundle min_driver cards
+  local bundle min_driver cards min_glibc
   if awk -v c="$cc" 'BEGIN { exit !(c >= 12.0) }'; then
-    bundle=bonsai2-small-gpu-linux-x64-cuda12.8-sm120-ff41412; min_driver=570; cards="RTX 50"
+    bundle=bonsai2-small-gpu-linux-x64-cuda12.8-sm120-ff41412; min_driver=570; cards="RTX 50"; min_glibc=2.38
   elif awk -v c="$cc" 'BEGIN { exit !(c >= 8.6 && c < 9.0) }'; then
-    bundle=bonsai2-small-gpu-linux-x64-cuda12.4-sm86-sm89-285542d; min_driver=550; cards="RTX 30 and 40"
+    bundle=bonsai2-small-gpu-linux-x64-cuda12.4-sm86-sm89-285542d; min_driver=525; cards="RTX 30 and 40"; min_glibc=2.35
   else
     echo "This card (compute $cc) is not in the prebuilt bundles yet, they cover RTX 30, 40 and 50."
     echo "Older cards can build the bonsai2 branch of github.com/sudoingX/llama.cpp from source."
@@ -44,6 +44,12 @@ main() {
   fi
   if [ "${driver%%.*}" -lt "$min_driver" ]; then
     echo "Driver $driver is too old for the $cards bundle. Update to $min_driver or newer, then run this again."
+    return 1
+  fi
+  local glibc; glibc=$(ldd --version 2>/dev/null | head -1 | grep -o -E '[0-9]+\.[0-9]+$' || true)
+  if [ -n "$glibc" ] && [ -z "$test" ] && awk -v g="$glibc" -v m="$min_glibc" 'BEGIN { exit !(g < m) }'; then
+    echo "The $cards bundle needs glibc $min_glibc or newer (Ubuntu $([ "$min_glibc" = 2.38 ] && echo 24.04 || echo 22.04) or newer), this system has $glibc."
+    echo "Upgrade, or build the bonsai2 branch of github.com/sudoingX/llama.cpp from source (see the README)."
     return 1
   fi
 

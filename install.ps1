@@ -1,9 +1,9 @@
 # Bonsai 2 27B on Windows, one line in PowerShell:
-#   irm https://raw.githubusercontent.com/sudoingX/bonsai2-small-gpu/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-rtx/main/install.ps1 | iex
 # It finds your NVIDIA card, picks the build and the model file for its VRAM, downloads them from
 # Hugging Face, checks every SHA256, writes start-bonsai.bat, bench-bonsai.bat and a desktop
 # shortcut, then starts the model and opens the chat page in your browser.
-# Optional, set before the line: $env:BONSAI_DIR (default %USERPROFILE%\bonsai2), $env:BONSAI_PORT (default 8080).
+# Optional, set before the line: $env:BONSAI_DIR (default %USERPROFILE%\bonsai2), $env:BONSAI_PORT (default 8899).
 
 function Install-Bonsai2 {
     $ErrorActionPreference = 'Stop'
@@ -15,9 +15,9 @@ function Install-Bonsai2 {
     $ref     = if ($env:BONSAI_REF) { $env:BONSAI_REF } else { 'main' }
     $hf      = 'https://huggingface.co/sudoingx/Ternary-Bonsai-2-27B-PTQ1_0-MTP-GGUF/resolve/main'
     $prism   = 'https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf/resolve/main'
-    $hub     = "https://raw.githubusercontent.com/sudoingX/bonsai2-small-gpu/$ref"
+    $hub     = "https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-rtx/$ref"
     $dir     = if ($env:BONSAI_DIR) { $env:BONSAI_DIR } else { Join-Path $env:USERPROFILE 'bonsai2' }
-    $port    = if ($env:BONSAI_PORT) { [int]$env:BONSAI_PORT } else { 8080 }
+    $port    = if ($env:BONSAI_PORT) { [int]$env:BONSAI_PORT } else { 8899 }
     $test    = [bool]$env:BONSAI_TEST   # CI only: skips the big downloads and the start
 
     $builds = @{
@@ -29,7 +29,7 @@ function Install-Bonsai2 {
 
     Write-Host ''
     Write-Host 'Bonsai 2 27B for small GPUs, Windows installer' -ForegroundColor Cyan
-    Write-Host 'github.com/sudoingX/bonsai2-small-gpu'
+    Write-Host 'github.com/sudoingX/local-ai-on-your-gaming-rtx'
     Write-Host ''
 
     # 1. the card (the one with the most VRAM if there are several)
