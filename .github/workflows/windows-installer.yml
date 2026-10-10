@@ -83,6 +83,8 @@ jobs:
           $out = powershell -NoProfile -ExecutionPolicy Bypass -File "$d\bonsai2.ps1" print | Out-String
           Write-Host $out
           if ($out -notmatch 'draft-mtp') { throw 'print mode shows no draft-mtp line' }
+          if ($out -notmatch '--alias bonsai-2-27b') { throw 'agents need the bonsai-2-27b model name' }
+          if ($out -notmatch '--host 127.0.0.1') { throw 'it should serve on 127.0.0.1 by default' }
           if ('${{ matrix.tier }}' -eq '8gb' -and $out -notmatch '-c 49152') { throw '8gb tier at 7900 MiB free should pick -c 49152' }
           if ('${{ matrix.tier }}' -ne '8gb' -and $out -notmatch '--fit on') { throw 'this tier should use --fit on' }
           if ('${{ matrix.tier }}' -eq '16gb' -and $out -notmatch 'mmproj') { throw '16gb tier should load the vision file' }
@@ -114,6 +116,7 @@ jobs:
           cat "$BONSAI_DIR/start-bonsai.sh"
           grep -q '${{ matrix.bundle }}' "$BONSAI_DIR/start-bonsai.sh"
           grep -q 'draft-mtp' "$BONSAI_DIR/start-bonsai.sh"
+          grep -q -- '--alias bonsai-2-27b' "$BONSAI_DIR/start-bonsai.sh"
           case '${{ matrix.tier }}' in
             8gb)  grep -q 'C=65536' "$BONSAI_DIR/start-bonsai.sh" && grep -q 'mtp-lean' "$BONSAI_DIR/start-bonsai.sh" ;;
             16gb) grep -q -- '--mmproj' "$BONSAI_DIR/start-bonsai.sh" && grep -q -- '--fit on' "$BONSAI_DIR/start-bonsai.sh" ;;

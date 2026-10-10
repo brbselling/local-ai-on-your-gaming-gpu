@@ -34,9 +34,12 @@ function Get-Context8gb {
     return 16384
 }
 
+# start mode serves on 127.0.0.1 unless BONSAI_HOST says otherwise (0.0.0.0 = your network, set BONSAI_API_KEY with it)
 function Get-ServerArgs([int]$port, [bool]$head, [bool]$chat) {
+    $bindHost = if ($chat -and $env:BONSAI_HOST) { $env:BONSAI_HOST } else { '127.0.0.1' }
     $a = @('-m', (Join-Path $here "models\$($cfg.model)"), '-ngl', '99', '-fa', 'on', '-np', '1', '-ctk', 'q4_0', '-ctv', 'q4_0', '--jinja',
-           '--host', '127.0.0.1', '--port', "$port")
+           '--alias', 'bonsai-2-27b', '--host', $bindHost, '--port', "$port")
+    if ($chat -and $env:BONSAI_API_KEY) { $a += @('--api-key', $env:BONSAI_API_KEY) }
     if ($cfg.mmproj) { $a += @('--mmproj', (Join-Path $here "models\$($cfg.mmproj)")) }
     if ($cfg.tier -eq '8gb') { $a += @('-c', "$(Get-Context8gb)", '--fit', 'off') }
     else { $a += @('--fit', 'on', '--fit-target', '1024', '--fit-ctx', '16384') }
@@ -65,6 +68,8 @@ if ($Mode -eq 'start') {
         return
     }
     Write-Host 'Bonsai 2 27B is loading, the chat page opens in your browser when it is ready.' -ForegroundColor Cyan
+    Write-Host "Chat page:       http://127.0.0.1:$port"
+    Write-Host "API for agents:  http://127.0.0.1:$port/v1  (OpenAI compatible, model bonsai-2-27b, any API key unless you set BONSAI_API_KEY)"
     Write-Host 'Close this window to stop it.'
     Write-Host ''
     $poll = "for(`$i=0;`$i -lt 900;`$i++){try{`$null=Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 http://127.0.0.1:$port/health;Start-Process http://127.0.0.1:$port;break}catch{Start-Sleep 1}}"

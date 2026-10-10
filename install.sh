@@ -105,17 +105,22 @@ DIR="\$(cd "\$(dirname "\$0")" && pwd)"
 B="\$DIR/$bundle"
 export LD_LIBRARY_PATH="\$B/lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}" CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=$idx GGML_CUDA_BATCH_INVARIANT=1
 PORT="\${BONSAI_PORT:-$port}"
+# 127.0.0.1 = this machine only; BONSAI_HOST=0.0.0.0 opens it to your network, set BONSAI_API_KEY with it
+HOST="\${BONSAI_HOST:-127.0.0.1}"
+KEY_ARGS=(); [ -n "\${BONSAI_API_KEY:-}" ] && KEY_ARGS=(--api-key "\$BONSAI_API_KEY")
 $ctx_line
-exec "\$B/bin/llama-server" -m "\$DIR/$model" $mm_arg -ngl 99 -fa on -np 1 -ctk q4_0 -ctv q4_0 --jinja \\
-  --reasoning-effort medium --temp 1.0 --top-p 0.95 --top-k 20 --host 127.0.0.1 --port "\$PORT" \\
-  "\${CTX_ARGS[@]}" --spec-type draft-mtp --spec-draft-n-max $nmax "\$@"
+echo "Chat page: http://127.0.0.1:\$PORT   API for agents: http://127.0.0.1:\$PORT/v1 (OpenAI compatible, model bonsai-2-27b)"
+exec "\$B/bin/llama-server" -m "\$DIR/$model" $mm_arg -ngl 99 -fa on -np 1 -ctk q4_0 -ctv q4_0 --jinja --alias bonsai-2-27b \\
+  --reasoning-effort medium --temp 1.0 --top-p 0.95 --top-k 20 --host "\$HOST" --port "\$PORT" \\
+  "\${CTX_ARGS[@]}" \${KEY_ARGS[@]+"\${KEY_ARGS[@]}"} --spec-type draft-mtp --spec-draft-n-max $nmax "\$@"
 EOF
   chmod +x "$dir/start-bonsai.sh"
 
   echo
   echo "Installed."
-  echo "Start it:  $dir/start-bonsai.sh"
-  echo "Chat page: http://127.0.0.1:$port"
+  echo "Start it:       $dir/start-bonsai.sh"
+  echo "Chat page:      http://127.0.0.1:$port"
+  echo "API for agents: http://127.0.0.1:$port/v1 (OpenAI compatible, model bonsai-2-27b, any API key)"
   if [ -z "$test" ] && [ -z "${BONSAI_NO_START:-}" ]; then
     echo; echo "Starting it now, Ctrl+C stops it."; echo
     exec "$dir/start-bonsai.sh"

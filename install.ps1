@@ -165,6 +165,7 @@ function Install-Bonsai2 {
     Write-Host ('Start it:         double-click "Bonsai 2 27B" on your desktop, or {0}' -f (Join-Path $dir 'start-bonsai.bat'))
     Write-Host ('Check your speed: {0}, it saves your results and copies them to the clipboard' -f (Join-Path $dir 'bench-bonsai.bat'))
     Write-Host ('Chat page:        http://127.0.0.1:{0}' -f $port)
+    Write-Host ('API for agents:   http://127.0.0.1:{0}/v1 (OpenAI compatible, model bonsai-2-27b, any API key)' -f $port)
     if (-not $test -and -not $env:BONSAI_NO_START) {
         Write-Host ''
         Write-Host 'Starting it now in a new window, the chat page opens when the model is loaded.'
