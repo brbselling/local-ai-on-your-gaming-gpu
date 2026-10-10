@@ -1,16 +1,37 @@
-# bonsai2-small-gpu
+# local-ai-on-your-gaming-rtx
 
-Run Ternary Bonsai 2 27B well on the cards people actually own. Serve lines per VRAM tier with the
-measured flags, a 1.5x faster decode kernel for the PrismML fork, the Qwen 3.8 MTP head grafted back
-onto the ternary file for lossless speculative decoding, and a sweep table that grows by PR.
+Run a 27B local AI on the gaming card you already own: RTX 30, 40 and 50 with 8 GB or more, on Windows and Linux,
+one line to install.
 
-The core numbers were measured on one RTX 3060 12GB, the most owned desktop GPU on Steam (3.92% of
-every surveyed system, August 2026), and the RTX 50 numbers on an RTX 5060 Ti 16GB. Other cards land as
-rows in `sweeps/` from their owners.
+Windows, in PowerShell:
 
-## Run it on your card
+```
+irm https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-rtx/main/install.ps1 | iex
+```
 
-Prebuilt Linux bundles on the [Hugging Face repo](https://huggingface.co/sudoingx/Ternary-Bonsai-2-27B-PTQ1_0-MTP-GGUF),
+Linux or WSL2:
+
+```
+curl -fsSL https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-rtx/main/install.sh | bash
+```
+
+It finds your card, downloads the right build and model from Hugging Face (about 8 GB, every file checked against
+its SHA256) and starts it. Chat in your browser at `http://127.0.0.1:8899`, or point any agent at
+`http://127.0.0.1:8899/v1` (OpenAI compatible, model `bonsai-2-27b`). On Windows a desktop shortcut starts it again
+and `bench-bonsai.bat` measures your card, see [Windows](#windows).
+
+The model today is Ternary Bonsai 2 27B, PrismML's 5.95 GB ternary Qwen 3.8 27B, with the Qwen 3.8 MTP speed head:
+50 tok/s on an RTX 3060 12GB. Windows is in beta until the first real-card runs are in.
+
+Under the hood: serve lines per VRAM tier with the measured flags, a 1.5x faster decode kernel for the PrismML fork,
+the Qwen 3.8 MTP head grafted back onto the ternary file for lossless speculative decoding, and a sweep table that
+grows by PR. The core numbers were measured on one RTX 3060 12GB, the most owned desktop GPU on Steam (3.92% of
+every surveyed system, August 2026), and the RTX 50 numbers on an RTX 5060 Ti 16GB. Other cards land as rows in
+`sweeps/` from their owners.
+
+## By hand: find your card
+
+The installers above do this for you. By hand on Linux: prebuilt bundles on the [Hugging Face repo](https://huggingface.co/sudoingx/Ternary-Bonsai-2-27B-PTQ1_0-MTP-GGUF),
 driver only, no compiler. Find your card, take its bundle and script:
 
 | your card | VRAM | bundle | script | what you get |
@@ -23,7 +44,7 @@ driver only, no compiler. Find your card, take its bundle and script:
 | RTX 5060 Ti 16GB, 5070 Ti, 5080, 5090 | 16 to 32 GB | cuda12.8 sm120 | `serve-16gb-mtp-vision.sh` | the MTP head, vision and the full 262K |
 
 Laptop GPUs: the same series, go by your VRAM. Measured so far: RTX 3060 12GB, RTX 3060 Ti 8GB, RTX 4070 12GB (a
-contributor), RTX 5060 Ti 16GB and the RTX 3000 Ada Laptop 8GB (a contributor); the other rows follow from the same VRAM
+contributor), RTX 5060 Ti 16GB, RTX 5080 16GB (a contributor) and the RTX 3000 Ada Laptop 8GB (a contributor); the other rows follow from the same VRAM
 numbers. The Ada Laptop is the case to read before expecting the kernel's gains: on a bandwidth-bound laptop part the
 PTQ1_0 mat-vec is worth about +7% decode on `bdc23b56b`, while the current PrismML `prism` branch (post-#221) adds +6 to
 +15% prefill and, with the lean (no-embed) MTP file, moves the lossless MTP window from 64K to 88064
@@ -49,7 +70,7 @@ cd ~/models/bonsai2-27b && tar xzf bonsai2-small-gpu-linux-x64-cuda12.4-sm86-sm8
 On 8GB cards take `Ternary-Bonsai-2-27B-PTQ1_0.gguf` from `prism-ml/Ternary-Bonsai-2-27B-gguf` instead and run
 `serve-8gb.sh`. Then open `http://localhost:8899`: the llama.cpp chat UI, and an OpenAI-compatible API at `/v1`.
 
-What you need: Linux x86-64 (on Windows, WSL2, see below) and `hf` (`pip install -U huggingface_hub`). The RTX 50
+What you need: Linux x86-64 (on Windows, the one line at the top, or WSL2) and `hf` (`pip install -U huggingface_hub`). The RTX 50
 bundle wants NVIDIA driver 570 or newer and Ubuntu 24.04 or newer (glibc 2.38); the RTX 30 and 40 bundle wants driver
 525 or newer and Ubuntu 22.04 or newer. On a card that also drives your display, start with a smaller window:
 `CTX=131072 ./serve-16gb-mtp-vision.sh`. Every script takes `MODEL`, `CTX`, `HOST` and `PORT` from the environment.
@@ -135,16 +156,39 @@ The GGUF chat template defaults `reasoning_effort` to `xhigh`, which adds a "thi
 
 ## Windows
 
-No native Windows build ships yet; run it in WSL2. Update the NVIDIA driver on Windows (570 or newer for RTX 50 cards)
-and do not install a Linux driver inside WSL. `wsl --install -d Ubuntu-24.04`, check that `nvidia-smi` inside WSL shows
-the card, keep the model files in the Linux filesystem (`~/`, not `/mnt/c`, which is much slower for multi-GB files),
-then use the Linux bundle for your card or the source build above. `http://localhost:8899` opens from Windows. On a
-card that is tight on VRAM, set NVIDIA Control Panel, Manage 3D settings, CUDA - Sysmem Fallback Policy to Prefer No
-Sysmem Fallback, so an overflow fails instead of silently spilling into system RAM. PrismML's own Windows CUDA release
-runs the same files at stock speed.
+A native build, no WSL needed, in beta until the first real-card runs are in. Needs Windows 10 or 11 x64, an RTX 30
+or 40 card with NVIDIA driver 551.61 or newer or an RTX 50 card with driver 580 or newer, and about 10 GB of disk.
+
+1. Open PowerShell and paste the line at the top. It installs to `%USERPROFILE%\bonsai2`, makes a desktop shortcut
+   "Bonsai 2 27B", starts the model and opens the chat page when it has loaded.
+2. Later, start it from the shortcut or `start-bonsai.bat`, and close its window to stop it.
+3. `bench-bonsai.bat` measures your card: decode speed with and without the MTP head, whether the greedy text is
+   identical both ways, and on 16 GB and up a chart-reading vision check. It saves the results and copies them to the
+   clipboard, ready for a PR with your row.
+
+What it picks: RTX 50 cards get the cuda13.3 sm_120 zip, RTX 30 and 40 the cuda12.4 sm_86 + sm_89 zip, both with the
+CUDA runtime and the Microsoft C++ runtime inside. 16 GB and up run the MTP file with vision, 12 GB the MTP file, 8 GB
+the lean MTP file with a window picked from free VRAM. From 12 GB up `--fit` sizes the window to the VRAM the desktop
+leaves free.
+
+Agents on another machine or in WSL2: `setx BONSAI_HOST 0.0.0.0` and `setx BONSAI_API_KEY <your key>`, start it
+again, then use `http://<this pc>:8899/v1` with that key. Without them it only listens on this PC.
+
+On a card that is tight on VRAM, set NVIDIA Control Panel, Manage 3D settings, CUDA - Sysmem Fallback Policy to Prefer
+No Sysmem Fallback, so an overflow fails instead of silently spilling into system RAM.
+
+WSL2 still works: update the NVIDIA driver on Windows and do not install a Linux driver inside WSL,
+`wsl --install -d Ubuntu-24.04`, check that `nvidia-smi` inside WSL shows the card, keep the model files in `~/`
+(not `/mnt/c`, which is much slower for multi-GB files), then run the Linux line.
 
 ## Changelog
 
+- **v1.2** (Oct 2026): native Windows. Windows x64 zips built on GitHub Actions from the v1.1 code (RTX 30 and 40:
+  CUDA 12.4; RTX 50: CUDA 13.3) with the CUDA and Microsoft C++ runtimes inside; one-line installers for Windows
+  (`install.ps1`) and Linux (`install.sh`) that pick the build and the model file for your card and check every
+  SHA256; `bench-bonsai.bat`; `16gb-vision.sh` at the full 262K (12,684 MiB on the RTX 5080 row); the RTX 5080 16GB
+  and RTX 3000 Ada Laptop 8GB sweeps from their owners; @LamplighterPaul's PDL wait merged into `pr-ptq1-mmv`
+  (PrismML-Eng/llama.cpp#218); the repo renamed from `bonsai2-small-gpu`.
 - **v1.1** (Sep 2026): RTX 50 series. The PTQ1_0 mat-vec PDL wait and the flash-attention q4_0 V dequant fix
   (`kernel/blackwell.md`); `bonsai2` rebased onto `prism-b10743-adfffbe`; a cuda12.8 sm_120 bundle; the 16GB serve line
   with the head and the vision tower at 262K; the RTX 5060 Ti 16GB sweep; the serve scripts take `LLAMA_SERVER`; the

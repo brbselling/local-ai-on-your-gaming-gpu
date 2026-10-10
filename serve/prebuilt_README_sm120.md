@@ -58,7 +58,7 @@ Thinking still counts against the client `max_tokens`; use 8,192 or more for cod
 get the template's behaviour back.
 
 The merged file is the original PTQ1_0 file with the `blk.64` MTP tensors of Qwen3.8-27B appended (byte-exact,
-reversible); the tools that make it are in github.com/sudoingX/bonsai2-small-gpu (`graft/`).
+reversible); the tools that make it are in github.com/sudoingX/local-ai-on-your-gaming-rtx (`graft/`).
 
 ## Files
 
