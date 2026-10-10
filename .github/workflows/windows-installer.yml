@@ -1,0 +1,175 @@
+# Checks install.ps1 and windows/bonsai2.ps1 on a real Windows PowerShell 5.1, and install.sh in bash, with fake cards.
+# The runners have no GPU, so the big downloads and the model start are skipped (BONSAI_TEST).
+name: installer check
+
+on:
+  push:
+    branches: [main, windows]
+    paths: ['install.ps1', 'install.sh', 'windows/**', '.github/workflows/windows-installer.yml']
+  pull_request:
+    paths: ['install.ps1', 'install.sh', 'windows/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - card: 'RTX 3060 12GB'
+            gpu: '0, NVIDIA GeForce RTX 3060, 12288, 595.95, 8.6'
+            tier: '12gb'
+            build: 'cuda12.4-sm86-sm89'
+          - card: 'RTX 5060 Ti 16GB'
+            gpu: '0, NVIDIA GeForce RTX 5060 Ti, 16311, 595.95, 12.0'
+            tier: '16gb'
+            build: 'cuda13.3-sm120'
+          - card: 'RTX 3000 Ada Laptop 8GB'
+            gpu: '0, NVIDIA RTX 3000 Ada Generation Laptop GPU, 8188, 595.95, 8.9'
+            tier: '8gb'
+            build: 'cuda12.4-sm86-sm89'
+          - card: 'GTX 1660 Super 6GB (refused)'
+            gpu: '0, NVIDIA GeForce GTX 1660 SUPER, 6144, 595.95, 7.5'
+            tier: 'none'
+            build: 'none'
+          - card: 'RTX 5070 on an old driver (refused)'
+            gpu: '0, NVIDIA GeForce RTX 5070, 12227, 572.16, 12.0'
+            tier: 'none'
+            build: 'none'
+
+    name: ${{ matrix.card }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse in Windows PowerShell 5.1, ASCII only
+        shell: powershell
+        run: |
+          foreach ($f in 'install.ps1', 'windows\bonsai2.ps1') {
+            $errs = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f).Path, [ref]$null, [ref]$errs)
+            if ($errs) { $errs | ForEach-Object { Write-Host "$f line $($_.Extent.StartLineNumber): $($_.Message)" }; exit 1 }
+            if ([IO.File]::ReadAllText((Resolve-Path $f).Path) -match '[^\x00-\x7F]') { Write-Host "$f has non-ASCII characters"; exit 1 }
+          }
+          Write-Host 'both scripts parse, ASCII only'
+
+      - name: Install for ${{ matrix.card }} the way irm | iex runs it
+        shell: powershell
+        env:
+          BONSAI_FAKE_GPU: ${{ matrix.gpu }}
+          BONSAI_FAKE_FREE: '7900'
+          BONSAI_TEST: '1'
+          BONSAI_HUB_DIR: ${{ github.workspace }}
+          BONSAI_DIR: ${{ runner.temp }}\bonsai2
+        run: |
+          Get-Content .\install.ps1 -Raw | Invoke-Expression
+          $d = $env:BONSAI_DIR
+          if ('${{ matrix.tier }}' -eq 'none') {
+            if (Test-Path "$d\bonsai2.json") { throw 'it installed on a card it should refuse' }
+            Write-Host 'refused, as it should'
+            exit 0
+          }
+          $cfg = Get-Content "$d\bonsai2.json" -Raw | ConvertFrom-Json
+          $cfg | Format-List | Out-String | Write-Host
+          if ($cfg.tier -ne '${{ matrix.tier }}') { throw "tier $($cfg.tier), expected ${{ matrix.tier }}" }
+          if ($cfg.build -notlike '*${{ matrix.build }}*') { throw "build $($cfg.build), expected ${{ matrix.build }}" }
+          foreach ($f in 'start-bonsai.bat', 'bench-bonsai.bat', 'bonsai2.ps1', 'vision_check.png', 'bonsai2.json') {
+            if (-not (Test-Path "$d\$f")) { throw "$f missing" }
+          }
+          Get-Content "$d\start-bonsai.bat" | Write-Host
+          $out = powershell -NoProfile -ExecutionPolicy Bypass -File "$d\bonsai2.ps1" print | Out-String
+          Write-Host $out
+          if ($out -notmatch 'draft-mtp') { throw 'print mode shows no draft-mtp line' }
+          if ($out -notmatch '--alias bonsai-2-27b') { throw 'agents need the bonsai-2-27b model name' }
+          if ($out -notmatch '--host 127.0.0.1') { throw 'it should serve on 127.0.0.1 by default' }
+          if ('${{ matrix.tier }}' -eq '8gb' -and $out -notmatch '-c 49152') { throw '8gb tier at 7900 MiB free should pick -c 49152' }
+          if ('${{ matrix.tier }}' -ne '8gb' -and $out -notmatch '--fit on') { throw 'this tier should use --fit on' }
+          if ('${{ matrix.tier }}' -eq '16gb' -and $out -notmatch 'mmproj') { throw '16gb tier should load the vision file' }
+
+  linux:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { card: 'RTX 3060 12GB', gpu: '0, NVIDIA GeForce RTX 3060, 12288, 595.95, 8.6', tier: '12gb', bundle: 'cuda12.4-sm86-sm89' }
+          - { card: 'RTX 5060 Ti 16GB', gpu: '0, NVIDIA GeForce RTX 5060 Ti, 16311, 595.95, 12.0', tier: '16gb', bundle: 'cuda12.8-sm120' }
+          - { card: 'RTX 3000 Ada Laptop 8GB', gpu: '0, NVIDIA RTX 3000 Ada Generation Laptop GPU, 8188, 595.95, 8.9', tier: '8gb', bundle: 'cuda12.4-sm86-sm89' }
+          - { card: 'GTX 1660 Super 6GB (refused)', gpu: '0, NVIDIA GeForce GTX 1660 SUPER, 6144, 595.95, 7.5', tier: 'none', bundle: 'none' }
+    name: linux ${{ matrix.card }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install for ${{ matrix.card }} the way curl | bash runs it
+        env:
+          BONSAI_FAKE_GPU: ${{ matrix.gpu }}
+          BONSAI_TEST: '1'
+          BONSAI_DIR: ${{ runner.temp }}/bonsai2
+        run: |
+          bash -n install.sh
+          set +e; cat install.sh | bash; rc=$?; set -e
+          if [ '${{ matrix.tier }}' = none ]; then [ $rc -ne 0 ] && [ ! -f "$BONSAI_DIR/start-bonsai.sh" ] && echo 'refused, as it should' && exit 0; echo 'it installed on a card it should refuse'; exit 1; fi
+          [ $rc -eq 0 ] || exit 1
+          bash -n "$BONSAI_DIR/start-bonsai.sh"
+          cat "$BONSAI_DIR/start-bonsai.sh"
+          grep -q '${{ matrix.bundle }}' "$BONSAI_DIR/start-bonsai.sh"
+          grep -q 'draft-mtp' "$BONSAI_DIR/start-bonsai.sh"
+          grep -q -- '--alias bonsai-2-27b' "$BONSAI_DIR/start-bonsai.sh"
+          case '${{ matrix.tier }}' in
+            8gb)  grep -q 'C=65536' "$BONSAI_DIR/start-bonsai.sh" && grep -q 'mtp-lean' "$BONSAI_DIR/start-bonsai.sh" ;;
+            16gb) grep -q -- '--mmproj' "$BONSAI_DIR/start-bonsai.sh" && grep -q -- '--fit on' "$BONSAI_DIR/start-bonsai.sh" ;;
+            12gb) grep -q -- '--fit on' "$BONSAI_DIR/start-bonsai.sh" && ! grep -q -- '--mmproj' "$BONSAI_DIR/start-bonsai.sh" ;;
+          esac
+
+  # The real files on Hugging Face: download, SHA256 check and unpack exactly as a user gets them, minus the 7 GB model.
+  windows-download:
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { card: 'RTX 3060 12GB', gpu: '0, NVIDIA GeForce RTX 3060, 12288, 595.95, 8.6', zip: 'bonsai2-small-gpu-windows-x64-cuda12.4-sm86-sm89-ff41412' }
+          - { card: 'RTX 5060 Ti 16GB', gpu: '0, NVIDIA GeForce RTX 5060 Ti, 16311, 595.95, 12.0', zip: 'bonsai2-small-gpu-windows-x64-cuda13.3-sm120-ff41412' }
+    name: windows download ${{ matrix.card }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Real download from Hugging Face, then start the exe from the installed folder
+        shell: powershell
+        env:
+          BONSAI_FAKE_GPU: ${{ matrix.gpu }}
+          BONSAI_SKIP_MODEL: '1'
+          BONSAI_NO_START: '1'
+          BONSAI_HUB_DIR: ${{ github.workspace }}
+          BONSAI_DIR: ${{ runner.temp }}\bonsai2
+        run: |
+          Get-Content .\install.ps1 -Raw | Invoke-Expression
+          $exe = "$env:BONSAI_DIR\${{ matrix.zip }}\bin\llama-server.exe"
+          if (-not (Test-Path $exe)) { throw "$exe missing after the install" }
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) { throw 'the installed llama-server.exe did not start' }
+          Get-ChildItem "$env:BONSAI_DIR\${{ matrix.zip }}" | Select-Object Name | Out-String | Write-Host
+
+  linux-download:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { card: 'RTX 3060 12GB', gpu: '0, NVIDIA GeForce RTX 3060, 12288, 595.95, 8.6', bundle: 'bonsai2-small-gpu-linux-x64-cuda12.4-sm86-sm89-285542d' }
+          - { card: 'RTX 5060 Ti 16GB', gpu: '0, NVIDIA GeForce RTX 5060 Ti, 16311, 595.95, 12.0', bundle: 'bonsai2-small-gpu-linux-x64-cuda12.8-sm120-ff41412' }
+    name: linux download ${{ matrix.card }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Real download from Hugging Face (no NVIDIA driver here, so the binary is checked, not started)
+        env:
+          BONSAI_FAKE_GPU: ${{ matrix.gpu }}
+          BONSAI_SKIP_MODEL: '1'
+          BONSAI_NO_START: '1'
+          BONSAI_DIR: ${{ runner.temp }}/bonsai2
+        run: |
+          cat install.sh | bash
+          test -x "$BONSAI_DIR/${{ matrix.bundle }}/bin/llama-server"
+          bash -n "$BONSAI_DIR/start-bonsai.sh"
+          file "$BONSAI_DIR/${{ matrix.bundle }}/bin/llama-server"

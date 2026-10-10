@@ -55,7 +55,7 @@ an SVG, an HTML page and a 100-line Python script (the whole cap went into `<thi
 the client `max_tokens`; use 8,192 or more for code, or pass `--reasoning-effort default` to get the template's behaviour back.
 
 The merged file is the original PTQ1_0 file with the `blk.64` MTP tensors of Qwen3.8-27B appended (byte-exact,
-reversible); the tools that make it are in github.com/sudoingX/bonsai2-small-gpu (`graft/`).
+reversible); the tools that make it are in github.com/sudoingX/local-ai-on-your-gaming-rtx (`graft/`).
 
 ## Files
 
