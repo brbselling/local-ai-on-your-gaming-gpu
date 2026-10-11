@@ -1,7 +1,7 @@
 # local-ai-on-your-gaming-rtx
 
-Run a 27B local AI on the gaming card you already own: RTX 30, 40 and 50 with 8 GB or more, on Windows and Linux,
-one line to install.
+Run a 27B local AI on the gaming card you already own: RTX 30, 40 and 50, and AMD Radeon in beta, with 8 GB or more,
+on Windows and Linux, one line to install.
 
 Windows, in PowerShell:
 
@@ -256,6 +256,12 @@ reports, and with it which window it gets.
 
 ## Changelog
 
+- **v1.3** (Oct 2026): AMD Radeon, in beta. The same two lines install on a Radeon with 8 GB or more and on Ryzen APUs
+  with more than 16 GB shared (Strix Halo class), on PrismML's own Vulkan build (`prism-b10772-e8fd209`), no ROCm: 8 GB
+  cards get up to 64K (ubatch 256, and the draft model's cache in q4_0 when it buys the bigger window), 12 GB about 195K,
+  16 GB and up the full 262K with vision, the head drafting 2 tokens on every tier; the start script pins the Radeon among
+  the Vulkan devices; a Linux speed check (`bench-bonsai.sh`) and a short line to share from both speed checks; the
+  Radeon 8060S rows. NVIDIA output is unchanged.
 - **v1.2** (Oct 2026): native Windows. Windows x64 zips built on GitHub Actions from the v1.1 code (RTX 30 and 40:
   CUDA 12.4; RTX 50: CUDA 13.3) with the CUDA and Microsoft C++ runtimes inside; one-line installers for Windows
   (`install.ps1`) and Linux (`install.sh`) that pick the build and the model file for your card and check every
