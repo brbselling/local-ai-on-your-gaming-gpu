@@ -38,7 +38,7 @@ No compiler: extract the prebuilt tarball from this repo (Ampere and Ada, driver
 
 ## Numbers
 
-RTX 3060 12GB, one slot, thinking off, 131072 context, q4_0 K/V, client-measured tok/s (`probe.py` in the [repo](https://github.com/sudoingX/local-ai-on-your-gaming-rtx), 3 prompts x 3 runs, medians), this fat file:
+RTX 3060 12GB, one slot, thinking off, 131072 context, q4_0 K/V, client-measured tok/s (`probe.py` in the [repo](https://github.com/sudoingX/local-ai-on-your-gaming-gpu), 3 prompts x 3 runs, medians), this fat file:
 
 | build | flag | tok/s |
 | --- | --- | ---: |
@@ -78,7 +78,7 @@ Header changes versus Bonsai 2: `qwen35.block_count` 64 → 65, `qwen35.nextn_pr
 
 ## Serving notes
 
-**Set `--reasoning-effort medium`.** The GGUF chat template defaults it to `xhigh`, which injects a "think carefully through the task" system line, and on an RTX 3060 at a 4,096-token client cap that returned **nothing at all** on all three build tasks tested: an SVG, a single-file HTML page and a 100-line Python CLI each spent the whole 4,096 tokens thinking and emitted no answer, in 108 seconds. At `medium` the same three completed in 45 to 58 seconds. Raising the cap does not fix it on its own, the SVG was still empty after 16,384 thinking tokens and 477 seconds. Three tasks, two caps, two runs each, every pair identical; the table is in [`kernel/reasoning_effort.md`](https://github.com/sudoingX/local-ai-on-your-gaming-rtx/blob/main/kernel/reasoning_effort.md). Per request it is the OpenAI `reasoning_effort` field; the serve scripts in the repo already pass it.
+**Set `--reasoning-effort medium`.** The GGUF chat template defaults it to `xhigh`, which injects a "think carefully through the task" system line, and on an RTX 3060 at a 4,096-token client cap that returned **nothing at all** on all three build tasks tested: an SVG, a single-file HTML page and a 100-line Python CLI each spent the whole 4,096 tokens thinking and emitted no answer, in 108 seconds. At `medium` the same three completed in 45 to 58 seconds. Raising the cap does not fix it on its own, the SVG was still empty after 16,384 thinking tokens and 477 seconds. Three tasks, two caps, two runs each, every pair identical; the table is in [`kernel/reasoning_effort.md`](https://github.com/sudoingX/local-ai-on-your-gaming-gpu/blob/main/kernel/reasoning_effort.md). Per request it is the OpenAI `reasoning_effort` field; the serve scripts in the repo already pass it.
 
 VRAM on an RTX 3060 12GB: fat file 10,638 MiB at 131072, 11,726 MiB at 163840 (with `-ctkd q4_0 -ctvd q4_0`); lean file 9,956 MiB at 131072, 11,990 MiB at 196608. Stock ggml-org llama.cpp cannot read PTQ1_0 and produces gibberish on any Bonsai 2 file; use the PrismML fork or the branch above.
 
@@ -86,7 +86,7 @@ Sampling per the base card: thinking `temperature 1.0, top_p 0.95, top_k 20`; in
 
 ## How it was made
 
-15 `blk.64.*` tensors, a full transformer block plus the `nextn` projections, copied verbatim from the unsloth GGUF into the Bonsai GGUF with the two header keys above; the fat file also copies the donor's token embedding for the head's own lookup. The residual stream of Bonsai 2 is in the original basis (its RMSNorm weights match stock Qwen 3.8 elementwise), so the head receives the activations it was trained on; only the embedding table is Hadamard-latent, which is what the lean file's 15-line fix inverts. Merge tool, byte-exact strip, identity and batch-numerics probes, 15 tests and `recipe.txt`: `graft/` in the [repo](https://github.com/sudoingX/local-ai-on-your-gaming-rtx). The kernel: `kernel/` there, and #218.
+15 `blk.64.*` tensors, a full transformer block plus the `nextn` projections, copied verbatim from the unsloth GGUF into the Bonsai GGUF with the two header keys above; the fat file also copies the donor's token embedding for the head's own lookup. The residual stream of Bonsai 2 is in the original basis (its RMSNorm weights match stock Qwen 3.8 elementwise), so the head receives the activations it was trained on; only the embedding table is Hadamard-latent, which is what the lean file's 15-line fix inverts. Merge tool, byte-exact strip, identity and batch-numerics probes, 15 tests and `recipe.txt`: `graft/` in the [repo](https://github.com/sudoingX/local-ai-on-your-gaming-gpu). The kernel: `kernel/` there, and #218.
 
 ## Credit
 

@@ -1,4 +1,4 @@
-# local-ai-on-your-gaming-rtx
+# local-ai-on-your-gaming-gpu
 
 Run a 27B local AI on the gaming card you already own: RTX 30, 40 and 50, and AMD Radeon in beta, with 8 GB or more,
 on Windows and Linux, one line to install.
@@ -6,13 +6,13 @@ on Windows and Linux, one line to install.
 Windows, in PowerShell:
 
 ```
-irm https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-rtx/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-gpu/main/install.ps1 | iex
 ```
 
 Linux or WSL2:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-rtx/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-gpu/main/install.sh | bash
 ```
 
 AMD Radeon with 8 GB or more, and Ryzen APUs like Strix Halo: the same two lines, on Vulkan with no ROCm to install,
@@ -261,7 +261,8 @@ reports, and with it which window it gets.
   cards get up to 64K (ubatch 256, and the draft model's cache in q4_0 when it buys the bigger window), 12 GB about 195K,
   16 GB and up the full 262K with vision, the head drafting 2 tokens on every tier; the start script pins the Radeon among
   the Vulkan devices; a Linux speed check (`bench-bonsai.sh`) and a short line to share from both speed checks; the
-  Radeon 8060S rows. NVIDIA output is unchanged.
+  Radeon 8060S rows; the repo renamed from `local-ai-on-your-gaming-rtx` (old links and one-liners still work). NVIDIA
+  output is unchanged apart from the repo name.
 - **v1.2** (Oct 2026): native Windows. Windows x64 zips built on GitHub Actions from the v1.1 code (RTX 30 and 40:
   CUDA 12.4; RTX 50: CUDA 13.3) with the CUDA and Microsoft C++ runtimes inside; one-line installers for Windows
   (`install.ps1`) and Linux (`install.sh`) that pick the build and the model file for your card and check every

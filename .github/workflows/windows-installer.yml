@@ -352,7 +352,8 @@ jobs:
               $text = & { Get-Content "$hub\install.ps1" -Raw | Invoke-Expression } *>&1 | Out-String
               foreach ($f in 'bonsai2.json', 'start-bonsai.bat', 'bench-bonsai.bat') { if (Test-Path "$d\$f") { $text += [IO.File]::ReadAllText("$d\$f") } }
               if (Test-Path "$d\bonsai2.ps1") { $text += (powershell -NoProfile -ExecutionPolicy Bypass -File "$d\bonsai2.ps1" print | Out-String) }
-              $got[$side] = $text
+              # the one intended change: the repo was renamed from local-ai-on-your-gaming-rtx in v1.3
+              $got[$side] = $text.Replace('local-ai-on-your-gaming-rtx', 'local-ai-on-your-gaming-gpu')
               if (Test-Path $d) { Rename-Item $d "nv-$side-$([array]::IndexOf($cards, $card))" }
             }
             $name = if ($card) { $card } else { 'no NVIDIA card, no Radeon' }
@@ -379,7 +380,8 @@ jobs:
               d="$RUNNER_TEMP/nv"
               out=$(BONSAI_FAKE_GPU="$card" BONSAI_TEST=1 BONSAI_DIR="$d" bash "$RUNNER_TEMP/install_$side.sh" 2>&1; echo "rc=$?")
               [ -f "$d/start-bonsai.sh" ] && out="$out$(cat "$d/start-bonsai.sh")"
-              printf '%s' "$out" > "$RUNNER_TEMP/out_$side"
+              # the one intended change: the repo was renamed from local-ai-on-your-gaming-rtx in v1.3
+              printf '%s' "$out" | sed 's/local-ai-on-your-gaming-rtx/local-ai-on-your-gaming-gpu/g' > "$RUNNER_TEMP/out_$side"
               [ -d "$d" ] && mv "$d" "$RUNNER_TEMP/nv-$side-$n"
             done
             if cmp -s "$RUNNER_TEMP/out_main" "$RUNNER_TEMP/out_branch"; then echo "same: ${card:-no NVIDIA card, no Radeon}"

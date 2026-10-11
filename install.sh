@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Bonsai 2 27B on Linux or WSL2, one line:
-#   curl -fsSL https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-rtx/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-gpu/main/install.sh | bash
 # It finds your NVIDIA card, picks the prebuilt bundle and the model file for its VRAM, downloads them
 # from Hugging Face, checks every SHA256, writes start-bonsai.sh next to them and starts it.
 # AMD Radeon (beta): with no NVIDIA card it looks for a Radeon and takes PrismML's Vulkan build instead.
@@ -17,7 +17,7 @@ main() {
 
   echo
   echo "Bonsai 2 27B for small GPUs, Linux installer"
-  echo "github.com/sudoingX/local-ai-on-your-gaming-rtx"
+  echo "github.com/sudoingX/local-ai-on-your-gaming-gpu"
   echo
 
   # 1. the card (the one with the most VRAM if there are several)
@@ -261,7 +261,7 @@ radeon() {
     fi
     # the chart the speed check's vision step reads (16 GB and APUs), from this repo
     if [ "$vision" = 1 ] && ! curl -fsSL -o "$dir/vision_check.png" \
-        "https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-rtx/${BONSAI_REF:-main}/prompts/vision_check.png"; then
+        "https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-gpu/${BONSAI_REF:-main}/prompts/vision_check.png"; then
       rm -f "$dir/vision_check.png"; echo "  (no vision_check.png this time, the speed check skips its vision step)"
     fi
   fi
@@ -349,7 +349,7 @@ radeon_bench() {
 #!/bin/bash
 # Bonsai 2 27B speed check, written by install.sh for $name ($mib MiB), $tier tier, AMD Radeon beta on Vulkan.
 # About 3 to 5 minutes: the model starts on port 8091 with the speed head, then without it, and runs the same prompts as every
-# row in github.com/sudoingX/local-ai-on-your-gaming-rtx. Stop the chat first (Ctrl+C in its window).
+# row in github.com/sudoingX/local-ai-on-your-gaming-gpu. Stop the chat first (Ctrl+C in its window).
 DIR="\$(cd "\$(dirname "\$0")" && pwd)"
 export DIR CARD_NAME=$(printf %q "$name") CARD_MIB=$mib APU=$apu TIER=$tier NMAX=$nmax MODEL=$model MMPROJ=$([ "$vision" = 1 ] && echo "$mmproj") BUILD=$build RELEASE=prism-b10772-e8fd209
 EOF
@@ -564,7 +564,7 @@ print(f'Saved to {out}.')
 print('Short line for X' + (', copied to your clipboard:' if copied else ':'))
 print(short + '\n')
 print('Share it: post the short line in a reply to @sudoingX, or open a pull request with the full block at '
-      'github.com/sudoingX/local-ai-on-your-gaming-rtx')
+      'github.com/sudoingX/local-ai-on-your-gaming-gpu')
 PY
 EOF
 }
