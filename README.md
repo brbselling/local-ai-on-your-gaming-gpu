@@ -1,19 +1,22 @@
-# local-ai-on-your-gaming-rtx
+# local-ai-on-your-gaming-gpu
 
-Run a 27B local AI on the gaming card you already own: RTX 30, 40 and 50 with 8 GB or more, on Windows and Linux,
-one line to install.
+Run a 27B local AI on the gaming card you already own: RTX 30, 40 and 50, and AMD Radeon in beta, with 8 GB or more,
+on Windows and Linux, one line to install.
 
 Windows, in PowerShell:
 
 ```
-irm https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-rtx/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-gpu/main/install.ps1 | iex
 ```
 
 Linux or WSL2:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-rtx/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-gpu/main/install.sh | bash
 ```
+
+AMD Radeon with 8 GB or more, and Ryzen APUs like Strix Halo: the same two lines, on Vulkan with no ROCm to install,
+in beta, see [Radeon (beta)](#radeon-beta).
 
 It finds your card, downloads the right build and model from Hugging Face (about 8 GB, every file checked against
 its SHA256) and starts it. Chat in your browser at `http://127.0.0.1:8899`, or point any agent at
@@ -181,8 +184,85 @@ WSL2 still works: update the NVIDIA driver on Windows and do not install a Linux
 `wsl --install -d Ubuntu-24.04`, check that `nvidia-smi` inside WSL shows the card, keep the model files in `~/`
 (not `/mnt/c`, which is much slower for multi-GB files), then run the Linux line.
 
+## Radeon (beta)
+
+The same two lines install on an AMD Radeon when there is no NVIDIA card: Radeon cards with 8 GB or more (the RX 6000,
+7000 and 9000 series) and Ryzen APUs with more than 16 GB of shared memory (Strix Halo class). It runs on Vulkan, so
+there is no ROCm to install: Vulkan comes with the AMD driver on Windows and with Mesa on Linux. The build is PrismML's
+own build of the same fork (release `prism-b10772-e8fd209`, Linux and Windows x64, pinned to its SHA256 and downloaded
+from PrismML's GitHub release), with the same model files and the same MTP head. Our CUDA decode kernel is NVIDIA only;
+on Vulkan, PrismML's own PTQ1_0 shader does the work.
+
+Find your card:
+
+| your card | VRAM | what you get |
+| --- | --- | --- |
+| RX 6600, 6600 XT, 6650 XT, 7600, 9060 XT 8GB | 8 GB | the lean MTP file, up to 64K: 64K when nothing else is on the card, 48K with your desktop on it |
+| RX 6700 | 10 GB | the lean MTP file, 64K |
+| RX 6700 XT, 6750 XT, 7700 XT | 12 GB | the MTP file, about 195K |
+| RX 6800, 6800 XT, 6900 XT, 6950 XT, 7600 XT, 7800 XT, 7900 GRE, 9060 XT 16GB, 9070, 9070 XT | 16 GB | the MTP file with vision, the full 262K |
+| RX 7900 XT, 7900 XTX, Radeon AI PRO R9700 | 20 to 32 GB | the MTP file with vision, the full 262K |
+| Ryzen AI Max (Strix Halo) and other Ryzen APUs with more than 16 GB shared | APU | the MTP file with vision, the full 262K |
+
+No desktop Radeon is measured yet. The windows are memory, and the memory a window takes is the same on any Radeon
+running this build: it was measured below on a Radeon 8060S, counting only what a discrete card keeps on the card. The
+speed is your card's, it follows its memory bandwidth and its generation, and only your card can tell it:
+[send your row](#own-a-radeon).
+
+What it picks: every tier runs the head drafting 2 tokens with K/V in q4_0 (on Vulkan `--spec-draft-n-max 2` was 15 to
+16% faster than 1, and n-max 3 and K/V in q8_0 were both slower). 8 and 10 GB cards run the lean MTP file with ubatch
+256 and take the biggest window their free memory allows: 64K needs 8,007 MiB free, or 7,727 MiB with the draft model's
+cache in q4_0, which costs about 3% of decode and so only comes on when it buys the bigger window; then 48K at 7,546 or
+7,403 MiB, 32K at 7,178 or 7,098 MiB, else 16K. 12 GB cards run the MTP file with ubatch 256, the q4_0 draft cache and
+`--fit`, which picks about 195K (158K without the two, which decode 1% faster). 16 GB and up, and APUs, run the MTP file
+with vision and `--fit`. Under 8 GB it stops and says why. The start script finds the Radeon among the Vulkan devices
+by its memory every time and passes `--device`, so a desktop with a Ryzen iGPU and a Radeon never splits the model onto
+the iGPU.
+
+What you need: on Windows the AMD Adrenalin driver (it brings Vulkan) and the Microsoft Visual C++ Redistributable x64
+(most gaming PCs have it, the installer checks and links it); on Linux Mesa's RADV driver
+(`sudo apt install mesa-vulkan-drivers libvulkan1`), glibc 2.34 or newer (Ubuntu 22.04 or newer) and python3 for the
+speed check. On Windows use the PowerShell line, not WSL2.
+
+Measured so far on one machine: a Radeon 8060S, the Strix Halo APU (40 CUs, about 256 GB/s, 128 GB unified memory), on
+Linux with Mesa 25.2.8, budgeted as an 8 GB and a 12 GB card by measuring what the server really allocates. It is an
+APU, not a desktop card, so these are not RX 7600 or RX 6700 XT speeds. Greedy decode, 3 x 512 tokens, median, with the
+head drafting 2 tokens; without the head every row decodes at 26.2 to 26.3 tok/s:
+
+| run as | file and settings | window | with the head | memory |
+| --- | --- | --- | ---: | ---: |
+| 8 GB card, nothing else on it | lean MTP, ubatch 256 | 65,536 | 46.1 tok/s | 7,957 MiB on the card |
+| 8 GB card, a little less free | lean MTP, ubatch 256, q4_0 draft cache | 65,536 | 44.1 tok/s | 7,677 MiB on the card |
+| 8 GB card, a desktop on it | lean MTP, ubatch 256, q4_0 draft cache | 49,152 | 44.9 tok/s (one run, after the long prompt) | 7,353 MiB on the card |
+| 12 GB card | MTP, ubatch 256, q4_0 draft cache, `--fit` | 194,816 | 46.6 tok/s | 10,894 MiB on the card |
+| APU, 16 GB tier | MTP + vision, `--fit` | 262,144 | 47.0 tok/s | 15,082 MiB, all of the server |
+
+The memory on the 8 and 12 GB rows is what a discrete card holds at the peak of a 12,842-token prompt: the server's
+Vulkan buffers plus what the long prompt adds, with the 300 to 650 MiB of host-side buffers left out, since a discrete
+card keeps those in system RAM. The installer's steps add 50 MiB to it. The APU row counts everything the server
+allocated, and its speed is the Linux speed check run through the installer. The vision check reads the chart right. On
+Vulkan the greedy text with the head is not the same as without it, there is no batch-invariant mode like
+`GGML_CUDA_BATCH_INVARIANT` on CUDA: on our identity prompt the two agree for the first 1,040 of 1,131 characters, then a
+near tie flips one token.
+
+### Own a Radeon?
+
+Run the speed check once, it takes 3 to 5 minutes: `bench-bonsai.bat` on Windows, `bench-bonsai.sh` on Linux, both in
+the install folder (stop the chat first). It starts the model with the speed head and without it, runs the same prompts
+as every row here, saves the full results next to itself and gives you one short line for X, on your clipboard when it
+can. Post the line in a reply to [@sudoingX](https://x.com/sudoingX), or open a pull request with the full block in
+`sweeps/`. 8 GB cards (RX 7600, 6600, 6650 XT) first: a real card shows how much free memory an 8 GB Radeon really
+reports, and with it which window it gets.
+
 ## Changelog
 
+- **v1.3** (Oct 2026): AMD Radeon, in beta. The same two lines install on a Radeon with 8 GB or more and on Ryzen APUs
+  with more than 16 GB shared (Strix Halo class), on PrismML's own Vulkan build (`prism-b10772-e8fd209`), no ROCm: 8 GB
+  cards get up to 64K (ubatch 256, and the draft model's cache in q4_0 when it buys the bigger window), 12 GB about 195K,
+  16 GB and up the full 262K with vision, the head drafting 2 tokens on every tier; the start script pins the Radeon among
+  the Vulkan devices; a Linux speed check (`bench-bonsai.sh`) and a short line to share from both speed checks; the
+  Radeon 8060S rows; the repo renamed from `local-ai-on-your-gaming-rtx` (old links and one-liners still work). NVIDIA
+  output is unchanged apart from the repo name.
 - **v1.2** (Oct 2026): native Windows. Windows x64 zips built on GitHub Actions from the v1.1 code (RTX 30 and 40:
   CUDA 12.4; RTX 50: CUDA 13.3) with the CUDA and Microsoft C++ runtimes inside; one-line installers for Windows
   (`install.ps1`) and Linux (`install.sh`) that pick the build and the model file for your card and check every
