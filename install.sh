@@ -259,6 +259,11 @@ radeon() {
       get "$hf/$model" "$dir/$model" "$(want "$model")"
       if [ "$vision" = 1 ]; then get "$prism/$mmproj" "$dir/$mmproj" "$mmproj_sha"; fi
     fi
+    # the chart the speed check's vision step reads (16 GB and APUs), from this repo
+    if [ "$vision" = 1 ] && ! curl -fsSL -o "$dir/vision_check.png" \
+        "https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-rtx/${BONSAI_REF:-main}/prompts/vision_check.png"; then
+      rm -f "$dir/vision_check.png"; echo "  (no vision_check.png this time, the speed check skips its vision step)"
+    fi
   fi
 
   # 5. the start script: it finds the Radeon among the Vulkan devices by its memory every time it starts, so the model
@@ -289,33 +294,279 @@ read -r DEV FREE <<< "$("$B/llama-server" --list-devices 2>/dev/null | awk -v wa
   }
   END { if (dev != "") print dev, bf }')"
 if [ -z "$DEV" ]; then echo "No Vulkan device found. Check the AMD driver and Vulkan (sudo apt install mesa-vulkan-drivers libvulkan1)."; exit 1; fi
+DRAFT_ARGS=()
 if [ "$TIER" = 8gb ]; then
-  # lean file with the head (n-max 2) on Vulkan, measured on a Radeon 8060S budgeted as an 8 GB card, all of the server's
-  # memory counted: about 7,265 MiB at 16K, 7,680 at 32K, 8,098 at 48K, 8,488 at 64K
-  if [ "$FREE" -ge 8550 ]; then C=65536; elif [ "$FREE" -ge 8150 ]; then C=49152; elif [ "$FREE" -ge 7750 ]; then C=32768; else C=16384; fi
-  [ "$FREE" -ge 7350 ] || echo "Only $FREE MiB free on the card, the smallest window needs about 7,265 MiB: close games and video apps or it may run slowly."
-  CTX_ARGS=(-c "$C" --fit off)
+  # lean file with the head (n-max 2) and ubatch 256 on Vulkan. Each step: the window, the MiB the card must have free and
+  # whether the draft model's cache goes q4_0. The MiB = the card's share of the server at the peak of a long prompt,
+  # measured on a Radeon 8060S with the host buffers left out (a discrete card keeps them in system RAM), plus 50 MiB.
+  # The q4_0 draft cache saves 80 to 280 MiB for about 3% decode, so it comes on only when it buys the bigger window.
+  C=16384 DQ=1
+  for s in 65536:8007:0 65536:7727:1 49152:7546:0 49152:7403:1 32768:7178:0 32768:7098:1; do
+    IFS=: read -r c need q <<< "$s"
+    if [ "$FREE" -ge "$need" ]; then C=$c DQ=$q; break; fi
+  done
+  [ "$FREE" -ge 6783 ] || echo "Only $FREE MiB free on the card, the smallest window needs about 6,800 MiB: close games and video apps or it may run slowly."
+  CTX_ARGS=(-c "$C" --fit off -ub 256)
+  [ "$DQ" = 1 ] && DRAFT_ARGS=(-ctkd q4_0 -ctvd q4_0)
+elif [ "$TIER" = 12gb ]; then
+  # 12 GB: ubatch 256 and the draft model's cache in q4_0 let --fit pick about 195K instead of 158K for about 1% decode
+  CTX_ARGS=(--fit on --fit-target 1024 --fit-ctx 16384 -ub 256)
+  DRAFT_ARGS=(-ctkd q4_0 -ctvd q4_0)
 else
   CTX_ARGS=(--fit on --fit-target 1024 --fit-ctx 16384)
 fi
+# the speed head drafts NMAX tokens; BONSAI_HEAD=off runs without it (the speed check uses that for its second pass)
+HEAD_ARGS=(--spec-type draft-mtp --spec-draft-n-max "$NMAX" ${DRAFT_ARGS[@]+"${DRAFT_ARGS[@]}"}); [ "${BONSAI_HEAD:-on}" = off ] && HEAD_ARGS=()
 echo "Radeon: $DEV, $FREE MiB free"
 echo "Chat page: http://127.0.0.1:$PORT   API for agents: http://127.0.0.1:$PORT/v1 (OpenAI compatible, model bonsai-2-27b)"
 exec "$B/llama-server" -m "$DIR/$MODEL" ${MM_ARGS[@]+"${MM_ARGS[@]}"} --device "$DEV" -ngl 99 -fa on -np 1 -ctk q4_0 -ctv q4_0 --jinja \
   --alias bonsai-2-27b --reasoning-effort medium --temp 1.0 --top-p 0.95 --top-k 20 --host "$HOST" --port "$PORT" \
-  "${CTX_ARGS[@]}" ${KEY_ARGS[@]+"${KEY_ARGS[@]}"} --spec-type draft-mtp --spec-draft-n-max "$NMAX" "$@"
+  "${CTX_ARGS[@]}" ${KEY_ARGS[@]+"${KEY_ARGS[@]}"} ${HEAD_ARGS[@]+"${HEAD_ARGS[@]}"} "$@"
 EOF
   } > "$dir/start-bonsai.sh"
   chmod +x "$dir/start-bonsai.sh"
+  radeon_bench > "$dir/bench-bonsai.sh"
+  chmod +x "$dir/bench-bonsai.sh"
 
   echo
   echo "Installed."
-  echo "Start it:       $dir/start-bonsai.sh"
-  echo "Chat page:      http://127.0.0.1:$port"
-  echo "API for agents: http://127.0.0.1:$port/v1 (OpenAI compatible, model bonsai-2-27b, any API key)"
+  echo "Start it:         $dir/start-bonsai.sh"
+  echo "Check your speed: $dir/bench-bonsai.sh, it saves your results and prints a short line to share"
+  echo "Chat page:        http://127.0.0.1:$port"
+  echo "API for agents:   http://127.0.0.1:$port/v1 (OpenAI compatible, model bonsai-2-27b, any API key)"
+  echo "Radeon support is in beta: run the speed check once and share the result, it sets the numbers for every Radeon owner."
   if [ -z "$test" ] && [ -z "${BONSAI_NO_START:-}" ]; then
     echo; echo "Starting it now, Ctrl+C stops it."; echo
     exec "$dir/start-bonsai.sh"
   fi
+}
+
+# bench-bonsai.sh for a Radeon: the same checks as bench-bonsai.bat on Windows (head on, then off, three 512-token greedy runs
+# each, the identity run, the vision check on 16 GB), a results block saved next to it and a short line for X. It starts the
+# model through start-bonsai.sh on port 8091, so the speed check always runs the settings the chat runs. Uses radeon's locals.
+radeon_bench() {
+  cat <<EOF
+#!/bin/bash
+# Bonsai 2 27B speed check, written by install.sh for $name ($mib MiB), $tier tier, AMD Radeon beta on Vulkan.
+# About 3 to 5 minutes: the model starts on port 8091 with the speed head, then without it, and runs the same prompts as every
+# row in github.com/sudoingX/local-ai-on-your-gaming-rtx. Stop the chat first (Ctrl+C in its window).
+DIR="\$(cd "\$(dirname "\$0")" && pwd)"
+export DIR CARD_NAME=$(printf %q "$name") CARD_MIB=$mib APU=$apu TIER=$tier NMAX=$nmax MODEL=$model MMPROJ=$([ "$vision" = 1 ] && echo "$mmproj") BUILD=$build RELEASE=prism-b10772-e8fd209
+EOF
+  cat <<'EOF'
+command -v python3 >/dev/null || { echo "The speed check needs python3 (Ubuntu or Debian: sudo apt install python3), then run it again."; exit 1; }
+exec python3 - "$@" <<'PY'
+import base64, glob, json, os, platform, re, shutil, statistics, subprocess, sys, time, urllib.request
+
+E = os.environ
+D, APU, PORT = E['DIR'], E.get('APU') == '1', 8091
+BASE = f'http://127.0.0.1:{PORT}'
+IDENT = 'Explain in about 150 words why speculative decoding with a multi-token prediction head can be lossless under greedy decoding.'
+SPEED = ('Write a detailed explanation of how a GPU runs a matrix-vector multiply: memory bandwidth, warps, caching and why '
+         'decode is bandwidth bound.')
+CHART = ("This chart has a group called 'fresh chat' with three bars. Give the three tok/s values as JSON with keys stock, "
+         "kernel, kernel_plus_head. Only the JSON.")
+
+
+def card_dir():
+    """this Radeon in /sys/class/drm: the AMD card whose VRAM matches, an APU the one with the biggest GTT"""
+    best = None
+    for c in sorted(glob.glob(os.path.join(E.get('BONSAI_DRM', '/sys/class/drm'), 'card*'))):
+        if '-' in os.path.basename(c):
+            continue
+        try:
+            if open(c + '/device/vendor').read().strip() != '0x1002':
+                continue
+            v = int(open(c + '/device/mem_info_vram_total').read()) // 1048576
+            g = int(open(c + '/device/mem_info_gtt_total').read()) // 1048576
+        except (OSError, ValueError):
+            continue
+        score = -g if APU else abs(v - int(E.get('CARD_MIB') or 0))
+        if best is None or score < best[0]:
+            best = (score, c)
+    return best[1] if best else None
+
+
+def used(c):
+    """MiB in use on the Radeon now (an APU: its own memory plus GTT), None when the driver does not report it"""
+    def rd(f):
+        try:
+            return int(open(f'{c}/device/{f}').read()) // 1048576
+        except (OSError, ValueError):
+            return None
+    v = rd('mem_info_vram_used') if c else None
+    return None if v is None else v + ((rd('mem_info_gtt_used') or 0) if APU else 0)
+
+
+def stop(p):
+    if p and p.poll() is None:
+        p.terminate()
+        try:
+            p.wait(30)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
+    time.sleep(2)
+
+
+def start(head):
+    log = os.path.join(D, 'bench-server-%s.log' % ('head' if head else 'nohead'))
+    env = dict(E, BONSAI_PORT=str(PORT), BONSAI_HOST='127.0.0.1', BONSAI_HEAD='on' if head else 'off')
+    env.pop('BONSAI_API_KEY', None)
+    with open(log, 'w') as f:
+        p = subprocess.Popen([os.path.join(D, 'start-bonsai.sh')], env=env, stdin=subprocess.DEVNULL, stdout=f,
+                             stderr=subprocess.STDOUT)
+    for _ in range(900):
+        if p.poll() is not None:
+            sys.exit(f'The server stopped while loading, the reason is at the end of {log}')
+        try:
+            urllib.request.urlopen(BASE + '/health', timeout=2).read()
+            return p, log
+        except Exception:
+            time.sleep(1)
+    stop(p)
+    sys.exit(f'The server did not come up in 15 minutes, see {log}')
+
+
+def ask(messages, max_tokens):
+    body = {'messages': messages, 'max_tokens': max_tokens, 'temperature': 0, 'top_k': 1, 'seed': 42,
+            'chat_template_kwargs': {'enable_thinking': False}}
+    req = urllib.request.Request(BASE + '/v1/chat/completions', data=json.dumps(body).encode(),
+                                 headers={'Content-Type': 'application/json'})
+    with urllib.request.urlopen(req, timeout=1800) as r:
+        j = json.loads(r.read())
+    t = j.get('timings') or {}
+    return {'text': j['choices'][0]['message'].get('content') or '', 'toks': float(t.get('predicted_per_second') or 0),
+            'dn': int(t.get('draft_n') or 0), 'da': int(t.get('draft_n_accepted') or 0)}
+
+
+def first_line(path, key, sep):
+    try:
+        for line in open(path):
+            if line.startswith(key):
+                return line.split(sep, 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    return None
+
+
+def mesa():
+    """the Vulkan driver's version: vulkaninfo when it is installed, else the package manager"""
+    tries = [(['vulkaninfo', '--summary'], r'driverInfo\s*=\s*Mesa\s+(\S+)'),
+             (['dpkg-query', '-W', '-f', '${Version}', 'mesa-vulkan-drivers'], r'^(?:\d+:)?([\d.]+)'),
+             (['pacman', '-Q', 'vulkan-radeon'], r'vulkan-radeon\s+([\d.]+)'),
+             (['rpm', '-q', '--qf', '%{VERSION}', 'mesa-vulkan-drivers'], r'^([\d.]+)')]
+    for cmd, pat in tries:
+        if not shutil.which(cmd[0]):
+            continue
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=30).stdout
+        except Exception:
+            continue
+        m = re.search(pat, out, re.M)
+        if m:
+            return 'Mesa ' + m.group(1)
+    return 'Mesa n/a'
+
+
+if shutil.which('pgrep') and subprocess.run(['pgrep', '-x', 'llama-server'], stdout=subprocess.DEVNULL).returncode == 0:
+    sys.exit('Bonsai (or another llama-server) is running, stop it first (Ctrl+C in its window), then run the speed check again.')
+stamp = time.strftime('%Y-%m-%d %H:%M')
+print('Bonsai 2 27B speed check, about 3 to 5 minutes. Close games and video apps first.', flush=True)
+card = card_dir()
+before = used(card)
+png = os.path.join(D, 'vision_check.png')
+vision = None
+if E.get('MMPROJ') and os.path.exists(png):
+    vision = [{'role': 'user', 'content': [
+        {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,' + base64.b64encode(open(png, 'rb').read()).decode()}},
+        {'type': 'text', 'text': CHART}]}]
+res, p, dev = {}, None, None
+try:
+    for head in (True, False):
+        tag = 'on' if head else 'off'
+        print(f'Loading with the speed head {tag}...', flush=True)
+        p, log = start(head)
+        ctx = json.loads(urllib.request.urlopen(BASE + '/props', timeout=30).read()).get('default_generation_settings', {}).get('n_ctx')
+        loaded = used(card)
+        print('  identity run', flush=True)
+        ident = ask([{'role': 'user', 'content': IDENT}], 400)
+        runs = []
+        for k in (1, 2, 3):
+            print(f'  speed run {k} of 3', flush=True)
+            runs.append(ask([{'role': 'user', 'content': SPEED}], 512))
+        vis = None
+        if head and vision:
+            print('  vision check', flush=True)
+            vis = ask(vision, 200)
+        if head:
+            m = re.search(r'^Radeon: (\S+), (\d+) MiB free', open(log).read(), re.M)
+            dev = m and f'{m.group(1)}, {m.group(2)} MiB free before the runs'
+        res[tag] = {'ctx': ctx, 'loaded': loaded, 'after': used(card), 'ident': ident, 'runs': runs, 'vis': vis}
+        stop(p)
+        p = None
+finally:
+    stop(p)
+
+on, off = res['on'], res['off']
+mon = statistics.median(r['toks'] for r in on['runs'])
+moff = statistics.median(r['toks'] for r in off['runs'])
+gain = round((mon / moff - 1) * 100) if moff else 0
+mib = lambda v: 'n/a' if v is None else f'{v} MiB'
+f1 = lambda v: f'{v:.1f}'
+cpu = first_line('/proc/cpuinfo', 'model name', ':') or platform.processor() or 'n/a'
+ram = first_line('/proc/meminfo', 'MemTotal:', ':')
+ram = round(int(ram.split()[0]) / 1048576) if ram else 'n/a'
+lines = [
+    f"Bonsai 2 27B, Linux speed check ({stamp}, {E['RELEASE']})",
+    f"card: {E['CARD_NAME']}, {E['CARD_MIB']} MiB{' of its own (an APU, the rest is shared GTT)' if APU else ''}, {mesa()} (RADV)",
+    f"system: {first_line('/etc/os-release', 'PRETTY_NAME=', '=') or 'Linux'}, kernel {platform.release()}, {cpu}, {ram} GB RAM",
+    f"build: {E['BUILD']}, tier {E['TIER']}, file {E['MODEL']}{' + vision' if E.get('MMPROJ') else ''}",
+    f'vram in use before start (desktop and other apps): {mib(before)}',
+    f"context: {on['ctx']} with the head, {off['ctx']} without",
+    f"vram with the head: {mib(on['loaded'])} loaded, {mib(on['after'])} after the runs",
+    f"speed with the head (mtp n-max {E['NMAX']}): {' / '.join(f1(r['toks']) for r in on['runs'])} tok/s, median {f1(mon)} tok/s, "
+    f"draft {sum(r['da'] for r in on['runs'])}/{sum(r['dn'] for r in on['runs'])} accepted",
+    f"speed without the head: {' / '.join(f1(r['toks']) for r in off['runs'])} tok/s, median {f1(moff)} tok/s",
+    f"head gain: {'+' if gain >= 0 else ''}{gain}%",
+    f"same greedy text with and without the head: {'yes' if on['ident']['text'] == off['ident']['text'] else 'NO'}",
+]
+if on['vis']:
+    vals = [float(x) for x in re.findall(r'\d+(?:\.\d+)?', on['vis']['text'])]
+    hits = sum(1 for w in (25.0, 39.8, 50.1) if any(abs(v - w) < 0.05 for v in vals))
+    lines.append('vision check (fresh chat bars 25.0 / 39.8 / 50.1): '
+                 + ('read right' if hits == 3 else 'missed, it answered: ' + on['vis']['text'].strip()))
+lines.append(f"radeon: AMD Radeon beta, Vulkan device {dev or 'n/a'}, memory from /sys/class/drm"
+             + (' (its own memory plus GTT)' if APU else ''))
+lines.append('greedy text on Vulkan: no batch-invariant mode, so a different text with and without the head is expected')
+text = '\n'.join(lines)
+size = 'apu' if APU else f"{round(int(E['CARD_MIB']) / 1024)}gb"
+# the README's names: 16k / 32k / 48k / 64k for those windows, thousands for the rest (131k, 195k, 262k)
+window = 'n/a' if not on['ctx'] else (f"{on['ctx'] // 1024}k" if on['ctx'] % 16384 == 0 and on['ctx'] < 131072
+                                       else f"{round(on['ctx'] / 1000)}k")
+short = (f"bonsai 2 27b on my {E['CARD_NAME'].lower()} {size} (linux, vulkan): {f1(mon)} tok/s with the mtp head, "
+         f"{f1(moff)} without, {window} context @sudoingX")
+out = os.path.join(D, time.strftime('bonsai2-results-%Y%m%d-%H%M.txt'))
+with open(out, 'w') as f:
+    f.write(text + '\n\nshort line for X:\n' + short + '\n')
+copied = False
+for cmd, need in ((['wl-copy'], 'WAYLAND_DISPLAY'), (['xclip', '-selection', 'clipboard'], 'DISPLAY'),
+                  (['xsel', '--clipboard', '--input'], 'DISPLAY')):
+    if E.get(need) and shutil.which(cmd[0]):
+        try:
+            subprocess.run(cmd, input=short.encode(), timeout=5, check=True)
+            copied = True
+            break
+        except Exception:
+            pass
+print('\n' + text + '\n')
+print(f'Saved to {out}.')
+print('Short line for X' + (', copied to your clipboard:' if copied else ':'))
+print(short + '\n')
+print('Share it: post the short line in a reply to @sudoingX, or open a pull request with the full block at '
+      'github.com/sudoingX/local-ai-on-your-gaming-rtx')
+PY
+EOF
 }
 
 main "$@"

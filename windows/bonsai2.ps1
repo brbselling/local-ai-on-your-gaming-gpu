@@ -70,18 +70,23 @@ function Get-VramMiB([string]$field) {
     return [int]("$(@($v)[0])".Trim())
 }
 
+# Radeon 8 GB on Vulkan, the lean file with the head (n-max 2) and ubatch 256. Each step: the window, the MiB the card must
+# have free and whether the draft model's cache goes q4_0. The MiB = the card's share of the server at the peak of a long
+# prompt, measured on a Radeon 8060S with the host buffers left out (a discrete card keeps them in system RAM), plus 50 MiB.
+# The q4_0 draft cache saves 80 to 280 MiB for about 3% decode, so it comes on only when it buys the bigger window.
+function Get-Window8gbVulkan {
+    $free = (Get-Vk).Free
+    foreach ($s in @(@(65536, 8007, $false), @(65536, 7727, $true), @(49152, 7546, $false), @(49152, 7403, $true),
+                     @(32768, 7178, $false), @(32768, 7098, $true))) {
+        if ($free -ge $s[1]) { return @{ Ctx = $s[0]; Q4 = $s[2] } }
+    }
+    return @{ Ctx = 16384; Q4 = $true }
+}
+
 # 8 GB cards: --fit is too careful with the lean file (it stops at 16K), so pick the window from free VRAM.
 # The lean file with the head uses about 7,150 MiB at 16K and 7,900 MiB at 64K (sweeps/rtx3000Ada-8gb.md).
 function Get-Context8gb {
-    if ($vulkan) {
-        # lean file with the head (n-max 2) on Vulkan, measured on a Radeon 8060S budgeted as an 8 GB card, all of the
-        # server's memory counted: about 7,265 MiB at 16K, 7,680 at 32K, 8,098 at 48K, 8,488 at 64K
-        $free = (Get-Vk).Free
-        if ($free -ge 8550) { return 65536 }
-        if ($free -ge 8150) { return 49152 }
-        if ($free -ge 7750) { return 32768 }
-        return 16384
-    }
+    if ($vulkan) { return (Get-Window8gbVulkan).Ctx }
     $free = Get-VramMiB 'memory.free'
     if ($free -ge 7950) { return 65536 }
     if ($free -ge 7700) { return 49152 }
@@ -99,7 +104,13 @@ function Get-ServerArgs([int]$port, [bool]$head, [bool]$chat) {
     if ($vulkan) { $a += @('--device', (Get-Vk).Name) }
     if ($cfg.tier -eq '8gb') { $a += @('-c', "$(Get-Context8gb)", '--fit', 'off') }
     else { $a += @('--fit', 'on', '--fit-target', '1024', '--fit-ctx', '16384') }
-    if ($head) { $a += @('--spec-type', 'draft-mtp', '--spec-draft-n-max', "$($cfg.nmax)") }
+    # Radeon 8 and 12 GB: ubatch 256 (less memory, same decode); 12 GB always and 8 GB when its step says so: the draft
+    # model's cache in q4_0 (12 GB: --fit picks about 195K instead of 158K for about 1% decode)
+    if ($vulkan -and $cfg.tier -in @('8gb', '12gb')) { $a += @('-ub', '256') }
+    if ($head) {
+        $a += @('--spec-type', 'draft-mtp', '--spec-draft-n-max', "$($cfg.nmax)")
+        if ($vulkan -and ($cfg.tier -eq '12gb' -or ($cfg.tier -eq '8gb' -and (Get-Window8gbVulkan).Q4))) { $a += @('-ctkd', 'q4_0', '-ctvd', 'q4_0') }
+    }
     if ($chat) { $a += @('--reasoning-effort', 'medium', '--temp', '1.0', '--top-p', '0.95', '--top-k', '20') }
     return ,$a
 }
@@ -256,11 +267,30 @@ if ($vulkan) {
 }
 $text = $lines -join "`r`n"
 if ($vulkan) { $text = $text -replace 'n/a MiB', 'n/a' }
+# Radeon: a short line that fits one post on X goes to the clipboard, the full block stays in the file for a pull request
+$short = $null
+if ($vulkan) {
+    $size = if ($cfg.apu) { 'apu' } else { '{0}gb' -f [math]::Round([double]$cfg.gpuMiB / 1024) }
+    # the README's names: 16k / 32k / 48k / 64k for those windows, thousands for the rest (131k, 195k, 262k)
+    $window = 'n/a'
+    if ($on.ctx) {
+        $c = [int]$on.ctx
+        $window = if ($c % 16384 -eq 0 -and $c -lt 131072) { '{0}k' -f ($c / 1024) } else { '{0}k' -f [math]::Round($c / 1000) }
+    }
+    $short = 'bonsai 2 27b on my {0} {1} (windows, vulkan): {2} tok/s with the mtp head, {3} without, {4} context @sudoingX' -f `
+        "$($cfg.gpuName)".ToLower(), $size, (Format-TokS $mOn), (Format-TokS $mOff), $window
+    $text += "`r`n`r`nshort line for X:`r`n$short"
+}
 $file = Join-Path $here ('bonsai2-results-{0}.txt' -f (Get-Date -Format 'yyyyMMdd-HHmm'))
 Set-Content -Path $file -Value $text -Encoding ASCII
-try { Set-Clipboard -Value $text } catch { }
+try { Set-Clipboard -Value $(if ($short) { $short } else { $text }) } catch { }
 Write-Host ''
 Write-Host $text
 Write-Host ''
-Write-Host "Saved to $file and copied to your clipboard." -ForegroundColor Green
-Write-Host 'Share it: paste it in a reply to @sudoingX, or open a pull request with your row at github.com/sudoingX/local-ai-on-your-gaming-rtx'
+if ($short) {
+    Write-Host "Saved to $file. The short line for X is on your clipboard." -ForegroundColor Green
+    Write-Host 'Share it: post the short line in a reply to @sudoingX, or open a pull request with the full block at github.com/sudoingX/local-ai-on-your-gaming-rtx'
+} else {
+    Write-Host "Saved to $file and copied to your clipboard." -ForegroundColor Green
+    Write-Host 'Share it: paste it in a reply to @sudoingX, or open a pull request with your row at github.com/sudoingX/local-ai-on-your-gaming-rtx'
+}
