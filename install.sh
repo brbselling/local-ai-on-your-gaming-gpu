@@ -9,7 +9,8 @@ set -euo pipefail
 
 main() {
   local dir="${BONSAI_DIR:-$HOME/models/bonsai2-27b}" port="${BONSAI_PORT:-8899}"
-  local hf=https://huggingface.co/sudoingx/Ternary-Bonsai-2-27B-PTQ1_0-MTP-GGUF/resolve/main
+  # BONSAI_HF (tests only): another base for the bundles, the MTP files and SHA256SUMS, e.g. a bundle not uploaded yet
+  local hf=${BONSAI_HF:-https://huggingface.co/sudoingx/Ternary-Bonsai-2-27B-PTQ1_0-MTP-GGUF/resolve/main}
   local prism=https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf/resolve/main
   local mmproj=Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf
   local mmproj_sha=6807ede61d570bb86ba34b756a0fa109edc33668604de867c6ea6d8f1d631903
@@ -44,8 +45,11 @@ main() {
     bundle=bonsai2-small-gpu-linux-x64-cuda12.8-sm120-ff41412; min_driver=570; cards="RTX 50"; min_glibc=2.38
   elif awk -v c="$cc" 'BEGIN { exit !(c >= 8.6 && c < 9.0) }'; then
     bundle=bonsai2-small-gpu-linux-x64-cuda12.4-sm86-sm89-285542d; min_driver=525; cards="RTX 30 and 40"; min_glibc=2.35
+  elif awk -v c="$cc" 'BEGIN { exit !(c >= 7.5 && c < 8.0) }'; then
+    # Turing (RTX 20, the GTX 16 cards stop at the VRAM check below): the same v1.1 code built for sm_75
+    bundle=bonsai2-small-gpu-linux-x64-cuda12.4-sm75-ff41412; min_driver=525; cards="RTX 20"; min_glibc=2.35
   else
-    echo "This card (compute $cc) is not in the prebuilt bundles yet, they cover RTX 30, 40 and 50."
+    echo "This card (compute $cc) is not in the prebuilt bundles yet, they cover RTX 20, 30, 40 and 50."
     echo "Older cards can build the bonsai2 branch of github.com/sudoingX/llama.cpp from source."
     return 1
   fi
@@ -67,6 +71,9 @@ main() {
   elif [ "$mib" -ge 7500 ];  then tier=8gb;  model=Ternary-Bonsai-2-27B-PTQ1_0-mtp-lean.gguf; vision=0; nmax=2
   else echo "Bonsai 2 27B needs a card with 8 GB or more, this one has $mib MiB."; return 1
   fi
+  # RTX 20: the head drafts 1 token on every tier. On an RTX 2070 Super n-max 1 decoded within 5% of n-max 2 and its server is
+  # 150 MiB smaller, which buys the 48K window on an 8 GB card
+  [ "$cards" = "RTX 20" ] && nmax=1
   echo "Bundle: $bundle ($cards)"
   echo "Model:  $model, $tier tier$([ "$vision" = 1 ] && echo ', with vision')"
   echo "Folder: $dir"
@@ -102,11 +109,23 @@ main() {
       get "$hf/$model" "$dir/$model" "$(want "$model")"
       if [ "$vision" = 1 ]; then get "$prism/$mmproj" "$dir/$mmproj" "$mmproj_sha"; fi
     fi
+    # the chart the speed check's vision step reads (16 GB), from this repo
+    if [ "$vision" = 1 ] && ! curl -fsSL -o "$dir/vision_check.png" \
+        "https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-gpu/${BONSAI_REF:-main}/prompts/vision_check.png"; then
+      rm -f "$dir/vision_check.png"; echo "  (no vision_check.png this time, the speed check skips its vision step)"
+    fi
   fi
 
   # 5. the start script: --fit sizes the window to free VRAM, 8 GB cards get a window picked from free VRAM
   local ctx_line='CTX_ARGS=(--fit on --fit-target 1024 --fit-ctx 16384)'
-  if [ "$tier" = 8gb ]; then
+  if [ "$tier" = 8gb ] && [ "$cards" = "RTX 20" ]; then
+    ctx_line='FREE=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits -i "$CUDA_VISIBLE_DEVICES" | head -1)
+# RTX 20, lean file, head n-max 1, ubatch 256: the server peaks at 6,720 MiB at 16K, 7,155 at 32K and 7,587 at 48K after a
+# 12,842-token prompt on an RTX 2070 Super (sweeps/rtx2070super-8gb.md), 64K does not load on 8 GB; each step = peak + 50
+if [ "$FREE" -ge 7650 ]; then C=49152; elif [ "$FREE" -ge 7250 ]; then C=32768; else C=16384; fi
+[ "$FREE" -ge 6800 ] || echo "Only $FREE MiB free on the card, the smallest window needs about 6,800 MiB: close games and video apps first."
+CTX_ARGS=(-c "$C" --fit off -ub 256)'
+  elif [ "$tier" = 8gb ]; then
     ctx_line='FREE=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits -i "$CUDA_VISIBLE_DEVICES" | head -1)
 # lean file with the head: about 7,150 MiB at 16K and 7,900 MiB at 64K (sweeps/rtx3000Ada-8gb.md)
 if [ "$FREE" -ge 7950 ]; then C=65536; elif [ "$FREE" -ge 7700 ]; then C=49152; elif [ "$FREE" -ge 7450 ]; then C=32768; else C=16384; fi
@@ -126,18 +145,24 @@ PORT="\${BONSAI_PORT:-$port}"
 HOST="\${BONSAI_HOST:-127.0.0.1}"
 KEY_ARGS=(); [ -n "\${BONSAI_API_KEY:-}" ] && KEY_ARGS=(--api-key "\$BONSAI_API_KEY")
 $ctx_line
+# the speed head drafts $nmax tokens; BONSAI_HEAD=off runs without it (the speed check uses that for its second pass)
+HEAD_ARGS=(--spec-type draft-mtp --spec-draft-n-max $nmax); [ "\${BONSAI_HEAD:-on}" = off ] && HEAD_ARGS=()
+echo "NVIDIA: GPU \$CUDA_VISIBLE_DEVICES, \$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits -i "\$CUDA_VISIBLE_DEVICES" 2>/dev/null | head -1) MiB free"
 echo "Chat page: http://127.0.0.1:\$PORT   API for agents: http://127.0.0.1:\$PORT/v1 (OpenAI compatible, model bonsai-2-27b)"
 exec "\$B/bin/llama-server" -m "\$DIR/$model" $mm_arg -ngl 99 -fa on -np 1 -ctk q4_0 -ctv q4_0 --jinja --alias bonsai-2-27b \\
   --reasoning-effort medium --temp 1.0 --top-p 0.95 --top-k 20 --host "\$HOST" --port "\$PORT" \\
-  "\${CTX_ARGS[@]}" \${KEY_ARGS[@]+"\${KEY_ARGS[@]}"} --spec-type draft-mtp --spec-draft-n-max $nmax "\$@"
+  "\${CTX_ARGS[@]}" \${KEY_ARGS[@]+"\${KEY_ARGS[@]}"} \${HEAD_ARGS[@]+"\${HEAD_ARGS[@]}"} "\$@"
 EOF
   chmod +x "$dir/start-bonsai.sh"
+  speed_check nvidia > "$dir/bench-bonsai.sh"
+  chmod +x "$dir/bench-bonsai.sh"
 
   echo
   echo "Installed."
-  echo "Start it:       $dir/start-bonsai.sh"
-  echo "Chat page:      http://127.0.0.1:$port"
-  echo "API for agents: http://127.0.0.1:$port/v1 (OpenAI compatible, model bonsai-2-27b, any API key)"
+  echo "Start it:         $dir/start-bonsai.sh"
+  echo "Check your speed: $dir/bench-bonsai.sh, it saves your results and prints a short line to share"
+  echo "Chat page:        http://127.0.0.1:$port"
+  echo "API for agents:   http://127.0.0.1:$port/v1 (OpenAI compatible, model bonsai-2-27b, any API key)"
   if [ -z "$test" ] && [ -z "${BONSAI_NO_START:-}" ]; then
     echo; echo "Starting it now, Ctrl+C stops it."; echo
     exec "$dir/start-bonsai.sh"
@@ -325,7 +350,7 @@ exec "$B/llama-server" -m "$DIR/$MODEL" ${MM_ARGS[@]+"${MM_ARGS[@]}"} --device "
 EOF
   } > "$dir/start-bonsai.sh"
   chmod +x "$dir/start-bonsai.sh"
-  radeon_bench > "$dir/bench-bonsai.sh"
+  speed_check radeon > "$dir/bench-bonsai.sh"
   chmod +x "$dir/bench-bonsai.sh"
 
   echo
@@ -341,11 +366,13 @@ EOF
   fi
 }
 
-# bench-bonsai.sh for a Radeon: the same checks as bench-bonsai.bat on Windows (head on, then off, three 512-token greedy runs
-# each, the identity run, the vision check on 16 GB), a results block saved next to it and a short line for X. It starts the
-# model through start-bonsai.sh on port 8091, so the speed check always runs the settings the chat runs. Uses radeon's locals.
-radeon_bench() {
-  cat <<EOF
+# bench-bonsai.sh, the speed check: the same checks as bench-bonsai.bat on Windows (head on, then off, three 512-token greedy
+# runs each, the identity run, the vision check on 16 GB), a results block saved next to it and a short line for X. It starts
+# the model through start-bonsai.sh on port 8091, so the speed check always runs the settings the chat runs.
+# speed_check radeon uses radeon's locals (AMD Radeon on Vulkan), speed_check nvidia uses main's (NVIDIA on CUDA).
+speed_check() {
+  if [ "$1" = radeon ]; then
+    cat <<EOF
 #!/bin/bash
 # Bonsai 2 27B speed check, written by install.sh for $name ($mib MiB), $tier tier, AMD Radeon beta on Vulkan.
 # About 3 to 5 minutes: the model starts on port 8091 with the speed head, then without it, and runs the same prompts as every
@@ -353,6 +380,16 @@ radeon_bench() {
 DIR="\$(cd "\$(dirname "\$0")" && pwd)"
 export DIR CARD_NAME=$(printf %q "$name") CARD_MIB=$mib APU=$apu TIER=$tier NMAX=$nmax MODEL=$model MMPROJ=$([ "$vision" = 1 ] && echo "$mmproj") BUILD=$build RELEASE=prism-b10772-e8fd209
 EOF
+  else
+    cat <<EOF
+#!/bin/bash
+# Bonsai 2 27B speed check, written by install.sh for $name ($mib MiB), $tier tier, NVIDIA on CUDA.
+# About 3 to 5 minutes: the model starts on port 8091 with the speed head, then without it, and runs the same prompts as every
+# row in github.com/sudoingX/local-ai-on-your-gaming-gpu. Stop the chat first (Ctrl+C in its window).
+DIR="\$(cd "\$(dirname "\$0")" && pwd)"
+export DIR BACKEND=nvidia CARD_NAME=$(printf %q "$name") CARD_MIB=$mib GPU_IDX=$idx CC=$cc DRIVER=$driver APU=0 TIER=$tier NMAX=$nmax MODEL=$model MMPROJ=$([ "$vision" = 1 ] && echo "$mmproj") BUILD=$bundle RELEASE=bonsai2-v1.1
+EOF
+  fi
   cat <<'EOF'
 command -v python3 >/dev/null || { echo "The speed check needs python3 (Ubuntu or Debian: sudo apt install python3), then run it again."; exit 1; }
 exec python3 - "$@" <<'PY'
@@ -360,6 +397,7 @@ import base64, glob, json, os, platform, re, shutil, statistics, subprocess, sys
 
 E = os.environ
 D, APU, PORT = E['DIR'], E.get('APU') == '1', 8091
+NV = E.get('BACKEND') == 'nvidia'
 BASE = f'http://127.0.0.1:{PORT}'
 IDENT = 'Explain in about 150 words why speculative decoding with a multi-token prediction head can be lossless under greedy decoding.'
 SPEED = ('Write a detailed explanation of how a GPU runs a matrix-vector multiply: memory bandwidth, warps, caching and why '
@@ -388,7 +426,14 @@ def card_dir():
 
 
 def used(c):
-    """MiB in use on the Radeon now (an APU: its own memory plus GTT), None when the driver does not report it"""
+    """MiB in use on the card now (NVIDIA: nvidia-smi; a Radeon: /sys, an APU its own memory plus GTT), None when unread"""
+    if NV:
+        try:
+            out = subprocess.run(['nvidia-smi', '--query-gpu=memory.used', '--format=csv,noheader,nounits', '-i', E['GPU_IDX']],
+                                 capture_output=True, text=True, timeout=30).stdout
+            return int(out.strip().splitlines()[0])
+        except Exception:
+            return None
     def rd(f):
         try:
             return int(open(f'{c}/device/{f}').read()) // 1048576
@@ -473,7 +518,7 @@ if shutil.which('pgrep') and subprocess.run(['pgrep', '-x', 'llama-server'], std
     sys.exit('Bonsai (or another llama-server) is running, stop it first (Ctrl+C in its window), then run the speed check again.')
 stamp = time.strftime('%Y-%m-%d %H:%M')
 print('Bonsai 2 27B speed check, about 3 to 5 minutes. Close games and video apps first.', flush=True)
-card = card_dir()
+card = None if NV else card_dir()
 before = used(card)
 png = os.path.join(D, 'vision_check.png')
 vision = None
@@ -500,7 +545,7 @@ try:
             print('  vision check', flush=True)
             vis = ask(vision, 200)
         if head:
-            m = re.search(r'^Radeon: (\S+), (\d+) MiB free', open(log).read(), re.M)
+            m = re.search(r'^(?:Radeon|NVIDIA): (.+?), (\d+) MiB free', open(log).read(), re.M)
             dev = m and f'{m.group(1)}, {m.group(2)} MiB free before the runs'
         res[tag] = {'ctx': ctx, 'loaded': loaded, 'after': used(card), 'ident': ident, 'runs': runs, 'vis': vis}
         stop(p)
@@ -519,6 +564,7 @@ ram = first_line('/proc/meminfo', 'MemTotal:', ':')
 ram = round(int(ram.split()[0]) / 1048576) if ram else 'n/a'
 lines = [
     f"Bonsai 2 27B, Linux speed check ({stamp}, {E['RELEASE']})",
+    f"card: {E['CARD_NAME']}, {E['CARD_MIB']} MiB, compute {E.get('CC')}, NVIDIA driver {E.get('DRIVER')}" if NV else
     f"card: {E['CARD_NAME']}, {E['CARD_MIB']} MiB{' of its own (an APU, the rest is shared GTT)' if APU else ''}, {mesa()} (RADV)",
     f"system: {first_line('/etc/os-release', 'PRETTY_NAME=', '=') or 'Linux'}, kernel {platform.release()}, {cpu}, {ram} GB RAM",
     f"build: {E['BUILD']}, tier {E['TIER']}, file {E['MODEL']}{' + vision' if E.get('MMPROJ') else ''}",
@@ -536,16 +582,22 @@ if on['vis']:
     hits = sum(1 for w in (25.0, 39.8, 50.1) if any(abs(v - w) < 0.05 for v in vals))
     lines.append('vision check (fresh chat bars 25.0 / 39.8 / 50.1): '
                  + ('read right' if hits == 3 else 'missed, it answered: ' + on['vis']['text'].strip()))
-lines.append(f"radeon: AMD Radeon beta, Vulkan device {dev or 'n/a'}, memory from /sys/class/drm"
-             + (' (its own memory plus GTT)' if APU else ''))
-lines.append('greedy text on Vulkan: no batch-invariant mode, so a different text with and without the head is expected')
+if NV:
+    turing = (E.get('CC') or '').startswith('7.')
+    lines.append(f"nvidia: CUDA, {dev or 'n/a'}, memory from nvidia-smi, GGML_CUDA_BATCH_INVARIANT=1"
+                 + (" (on RTX 20 cards it does not cover every kernel: a near tie can flip a token, so the greedy text with the "
+                    "head can differ)" if turing else " (the same greedy text with and without the head is expected)"))
+else:
+    lines.append(f"radeon: AMD Radeon beta, Vulkan device {dev or 'n/a'}, memory from /sys/class/drm"
+                 + (' (its own memory plus GTT)' if APU else ''))
+    lines.append('greedy text on Vulkan: no batch-invariant mode, so a different text with and without the head is expected')
 text = '\n'.join(lines)
 size = 'apu' if APU else f"{round(int(E['CARD_MIB']) / 1024)}gb"
 # the README's names: 16k / 32k / 48k / 64k for those windows, thousands for the rest (131k, 195k, 262k)
 window = 'n/a' if not on['ctx'] else (f"{on['ctx'] // 1024}k" if on['ctx'] % 16384 == 0 and on['ctx'] < 131072
                                        else f"{round(on['ctx'] / 1000)}k")
-short = (f"bonsai 2 27b on my {E['CARD_NAME'].lower()} {size} (linux, vulkan): {f1(mon)} tok/s with the mtp head, "
-         f"{f1(moff)} without, {window} context @sudoingX")
+short = (f"bonsai 2 27b on my {E['CARD_NAME'].lower()} {size} (linux, {'cuda' if NV else 'vulkan'}): {f1(mon)} tok/s with "
+         f"the mtp head, {f1(moff)} without, {window} context @sudoingX")
 out = os.path.join(D, time.strftime('bonsai2-results-%Y%m%d-%H%M.txt'))
 with open(out, 'w') as f:
     f.write(text + '\n\nshort line for X:\n' + short + '\n')

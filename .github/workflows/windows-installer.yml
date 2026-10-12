@@ -35,6 +35,11 @@ jobs:
             tier: '8gb'
             build: 'cuda12.4-sm86-sm89'
             ctx8: '49152'
+          - card: 'RTX 2070 Super 8GB (Turing)'
+            gpu: '0, NVIDIA GeForce RTX 2070 SUPER, 8192, 595.84, 7.5'
+            tier: '8gb'
+            build: 'cuda12.4-sm75'
+            ctx8: '49152'
           - card: 'GTX 1660 Super 6GB (refused)'
             gpu: '0, NVIDIA GeForce GTX 1660 SUPER, 6144, 595.95, 7.5'
             tier: 'none'
@@ -154,9 +159,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { card: 'RTX 3060 12GB', gpu: '0, NVIDIA GeForce RTX 3060, 12288, 595.95, 8.6', tier: '12gb', bundle: 'cuda12.4-sm86-sm89' }
-          - { card: 'RTX 5060 Ti 16GB', gpu: '0, NVIDIA GeForce RTX 5060 Ti, 16311, 595.95, 12.0', tier: '16gb', bundle: 'cuda12.8-sm120' }
-          - { card: 'RTX 3000 Ada Laptop 8GB', gpu: '0, NVIDIA RTX 3000 Ada Generation Laptop GPU, 8188, 595.95, 8.9', tier: '8gb', bundle: 'cuda12.4-sm86-sm89' }
+          - { card: 'RTX 3060 12GB', gpu: '0, NVIDIA GeForce RTX 3060, 12288, 595.95, 8.6', tier: '12gb', bundle: 'cuda12.4-sm86-sm89', nmax: '1' }
+          - { card: 'RTX 5060 Ti 16GB', gpu: '0, NVIDIA GeForce RTX 5060 Ti, 16311, 595.95, 12.0', tier: '16gb', bundle: 'cuda12.8-sm120', nmax: '1' }
+          - { card: 'RTX 3000 Ada Laptop 8GB', gpu: '0, NVIDIA RTX 3000 Ada Generation Laptop GPU, 8188, 595.95, 8.9', tier: '8gb', bundle: 'cuda12.4-sm86-sm89', nmax: '2', ctx8: '49152' }
+          - { card: 'RTX 2070 Super 8GB (Turing)', gpu: '0, NVIDIA GeForce RTX 2070 SUPER, 8192, 595.84, 7.5', tier: '8gb', bundle: 'cuda12.4-sm75', nmax: '1', ctx8: '49152' }
           - { card: 'GTX 1660 Super 6GB (refused)', gpu: '0, NVIDIA GeForce GTX 1660 SUPER, 6144, 595.95, 7.5', tier: 'none', bundle: 'none' }
           # Radeons: drm = 'cardN vendor VRAM-MiB GTT-MiB name' per card, vk = what the Vulkan build lists at start
           - { card: 'Radeon RX 7600 8GB, desktop on it', drm: 'card1 0x1002 8176 15000 AMD Radeon RX 7600',
@@ -209,10 +215,40 @@ jobs:
           if [ -z '${{ matrix.drm }}' ]; then
             grep -q '${{ matrix.bundle }}' "$BONSAI_DIR/start-bonsai.sh"
             case '${{ matrix.tier }}' in
-              8gb)  grep -q 'C=65536' "$BONSAI_DIR/start-bonsai.sh" && grep -q 'mtp-lean' "$BONSAI_DIR/start-bonsai.sh" ;;
+              8gb)  grep -q 'C=49152' "$BONSAI_DIR/start-bonsai.sh" && grep -q 'mtp-lean' "$BONSAI_DIR/start-bonsai.sh" ;;
               16gb) grep -q -- '--mmproj' "$BONSAI_DIR/start-bonsai.sh" && grep -q -- '--fit on' "$BONSAI_DIR/start-bonsai.sh" ;;
               12gb) grep -q -- '--fit on' "$BONSAI_DIR/start-bonsai.sh" && ! grep -q -- '--mmproj' "$BONSAI_DIR/start-bonsai.sh" ;;
             esac
+            # NVIDIA: the start script against stand-ins, an nvidia-smi that reports 7,900 MiB free and a llama-server that
+            # prints its arguments, then the speed check end to end against a stand-in server with fixed timings
+            F="$RUNNER_TEMP/fakebin"; mkdir -p "$F"
+            printf '%s\n' '#!/bin/bash' 'case "$*" in *memory.free*) echo 7900 ;; *memory.used*) echo 512 ;; *) echo "nvidia-smi stand-in" ;; esac' > "$F/nvidia-smi"
+            chmod +x "$F/nvidia-smi"
+            B="$BONSAI_DIR/$(sed -n 's|^B="\$DIR/\(.*\)"$|\1|p' "$BONSAI_DIR/start-bonsai.sh")/bin"; mkdir -p "$B"
+            printf '%s\n' '#!/bin/bash' 'echo "SERVER ARGS: $*"' > "$B/llama-server"; chmod +x "$B/llama-server"
+            out=$(PATH="$F:$PATH" bash "$BONSAI_DIR/start-bonsai.sh"); echo "$out"
+            args=$(grep '^SERVER ARGS:' <<< "$out")
+            grep -q -- '--spec-type draft-mtp --spec-draft-n-max ${{ matrix.nmax }}' <<< "$args"
+            grep -q '^NVIDIA: GPU 0, 7900 MiB free' <<< "$out"
+            if [ '${{ matrix.tier }}' = 8gb ]; then grep -q -- '-c ${{ matrix.ctx8 }} --fit off' <<< "$args"; fi
+            out=$(PATH="$F:$PATH" BONSAI_HEAD=off bash "$BONSAI_DIR/start-bonsai.sh"); echo "$out"
+            ! grep -q 'draft-mtp' <<< "$(grep '^SERVER ARGS:' <<< "$out")"
+            bash -n "$BONSAI_DIR/bench-bonsai.sh"
+            printf '%s\n' '#!/usr/bin/env python3' 'import http.server, json, sys' 'a = sys.argv[1:]' \
+              'head = "--spec-type" in a; ctx = int(a[a.index("-c") + 1]) if "-c" in a else 131072' \
+              'class H(http.server.BaseHTTPRequestHandler):' '    def log_message(self, *x): pass' \
+              '    def send(self, o):' '        b = json.dumps(o).encode(); self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)' \
+              '    def do_GET(self): self.send({"status": "ok"} if self.path == "/health" else {"default_generation_settings": {"n_ctx": ctx}})' \
+              '    def do_POST(self):' '        self.rfile.read(int(self.headers["Content-Length"]))' \
+              '        self.send({"choices": [{"message": {"content": "same answer"}}], "timings": {"predicted_per_second": 45.6 if head else 26.2, "draft_n": 100 if head else 0, "draft_n_accepted": 70 if head else 0}})' \
+              'http.server.HTTPServer(("127.0.0.1", int(a[a.index("--port") + 1])), H).serve_forever()' > "$B/llama-server"
+            out=$(PATH="$F:$PATH" bash "$BONSAI_DIR/bench-bonsai.sh"); echo "$out"
+            grep -q 'speed with the head (mtp n-max ${{ matrix.nmax }}): 45.6 / 45.6 / 45.6 tok/s, median 45.6 tok/s, draft 210/300 accepted' <<< "$out"
+            grep -q 'speed without the head: 26.2 / 26.2 / 26.2 tok/s, median 26.2 tok/s' <<< "$out"
+            grep -q 'same greedy text with and without the head: yes' <<< "$out"
+            grep -q 'vram with the head: 512 MiB loaded' <<< "$out"
+            grep -q '(linux, cuda): 45.6 tok/s with the mtp head, 26.2 without' <<< "$out"
+            ls "$BONSAI_DIR"/bonsai2-results-*.txt
           else
             # Radeon: the start script against a stand-in llama-server that lists the Vulkan devices and prints its arguments
             grep -q 'TIER=${{ matrix.tier }} ' "$BONSAI_DIR/start-bonsai.sh"
@@ -339,7 +375,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'git worktree add failed' }
           $ErrorActionPreference = 'Stop'
           $cards = @('0, NVIDIA GeForce RTX 3060, 12288, 595.95, 8.6', '0, NVIDIA GeForce RTX 5060 Ti, 16311, 595.95, 12.0',
-                     '0, NVIDIA RTX 3000 Ada Generation Laptop GPU, 8188, 595.95, 8.9', '0, NVIDIA GeForce GTX 1660 SUPER, 6144, 595.95, 7.5',
+                     '0, NVIDIA RTX 3000 Ada Generation Laptop GPU, 8188, 595.95, 8.9',
                      '0, NVIDIA GeForce RTX 5070, 12227, 572.16, 12.0', '')
           $env:BONSAI_TEST = '1'; $env:BONSAI_FAKE_FREE = '7900'
           $bad = 0
@@ -362,9 +398,12 @@ jobs:
           }
           if ($bad) { throw "$bad NVIDIA cases changed" }
 
+  # v1.4 changes the NVIDIA start script on purpose (the BONSAI_HEAD switch, the speed check), so on Linux the guard
+  # compares what decides a covered card's result: the card / bundle / model lines, the exit code, and the exact arguments
+  # llama-server gets from start-bonsai.sh (stand-ins for nvidia-smi and llama-server), main against this branch.
   nvidia-unchanged-linux:
     runs-on: ubuntu-24.04
-    name: NVIDIA output unchanged from main, Linux
+    name: NVIDIA serve line unchanged from main, Linux
     steps:
       - uses: actions/checkout@v4
         with:
@@ -373,24 +412,31 @@ jobs:
         run: |
           git show origin/main:install.sh > "$RUNNER_TEMP/install_main.sh"
           cp install.sh "$RUNNER_TEMP/install_branch.sh"
+          F="$RUNNER_TEMP/fakebin"; mkdir -p "$F"
+          printf '%s\n' '#!/bin/bash' 'case "$*" in *memory.free*) echo 7900 ;; *) echo 512 ;; esac' > "$F/nvidia-smi"; chmod +x "$F/nvidia-smi"
           bad=0; n=0
           while IFS= read -r card; do
             n=$((n + 1))
             for side in main branch; do
               d="$RUNNER_TEMP/nv"
               out=$(BONSAI_FAKE_GPU="$card" BONSAI_TEST=1 BONSAI_DIR="$d" bash "$RUNNER_TEMP/install_$side.sh" 2>&1; echo "rc=$?")
-              [ -f "$d/start-bonsai.sh" ] && out="$out$(cat "$d/start-bonsai.sh")"
-              # the one intended change: the repo was renamed from local-ai-on-your-gaming-rtx in v1.3
-              printf '%s' "$out" | sed 's/local-ai-on-your-gaming-rtx/local-ai-on-your-gaming-gpu/g' > "$RUNNER_TEMP/out_$side"
+              # the lines up to "Installed." and the exit code (the repo rename of v1.3 is the one intended text change)
+              { sed -n '1,/^Installed\./p' <<< "$out" | grep -v '^Installed\.'; tail -1 <<< "$out"; } \
+                | sed 's/local-ai-on-your-gaming-rtx/local-ai-on-your-gaming-gpu/g' > "$RUNNER_TEMP/out_$side"
+              if [ -f "$d/start-bonsai.sh" ]; then
+                B="$d/$(sed -n 's|^B="\$DIR/\(.*\)"$|\1|p' "$d/start-bonsai.sh")/bin"; mkdir -p "$B"
+                printf '%s\n' '#!/bin/bash' 'echo "SERVER ARGS: $*"' > "$B/llama-server"; chmod +x "$B/llama-server"
+                PATH="$F:$PATH" bash "$d/start-bonsai.sh" | grep '^SERVER ARGS:' >> "$RUNNER_TEMP/out_$side"
+                grep '^export ' "$d/start-bonsai.sh" >> "$RUNNER_TEMP/out_$side"
+              fi
               [ -d "$d" ] && mv "$d" "$RUNNER_TEMP/nv-$side-$n"
             done
-            if cmp -s "$RUNNER_TEMP/out_main" "$RUNNER_TEMP/out_branch"; then echo "same: ${card:-no NVIDIA card, no Radeon}"
+            if cmp -s "$RUNNER_TEMP/out_main" "$RUNNER_TEMP/out_branch"; then echo "same: ${card:-no NVIDIA card, no Radeon}"; cat "$RUNNER_TEMP/out_branch"
             else bad=$((bad + 1)); echo "DIFFERENT: $card"; diff "$RUNNER_TEMP/out_main" "$RUNNER_TEMP/out_branch" || true; fi
           done <<'CARDS'
           0, NVIDIA GeForce RTX 3060, 12288, 595.95, 8.6
           0, NVIDIA GeForce RTX 5060 Ti, 16311, 595.95, 12.0
           0, NVIDIA RTX 3000 Ada Generation Laptop GPU, 8188, 595.95, 8.9
-          0, NVIDIA GeForce GTX 1660 SUPER, 6144, 595.95, 7.5
           0, NVIDIA GeForce RTX 5070, 12227, 572.16, 12.0
 
           CARDS

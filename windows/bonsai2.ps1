@@ -15,6 +15,8 @@ $smi  = "$env:SystemRoot\System32\nvidia-smi.exe"
 if (-not (Test-Path $smi)) { $c = Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue; if ($c) { $smi = $c.Source } }
 # AMD Radeon (beta): PrismML's Vulkan build, its files sit in the build folder itself, and there is no nvidia-smi
 $vulkan = $cfg.backend -eq 'vulkan'
+# RTX 20 (Turing, compute 7.5): its own 8 GB window steps and ubatch 256
+$turing = (-not $vulkan) -and $cfg.cc -and ([double]::Parse("$($cfg.cc)", $inv) -lt 8.0)
 
 if ($vulkan) {
     $exe = Join-Path $here "$($cfg.build)\llama-server.exe"
@@ -88,6 +90,13 @@ function Get-Window8gbVulkan {
 function Get-Context8gb {
     if ($vulkan) { return (Get-Window8gbVulkan).Ctx }
     $free = Get-VramMiB 'memory.free'
+    # RTX 20 (Turing), the lean file with the head at n-max 1 and ubatch 256: the server peaks at 6,720 MiB at 16K, 7,155 at 32K
+    # and 7,587 at 48K after a 12,842-token prompt on an RTX 2070 Super (Linux); 64K does not load on 8 GB. Step = peak + 50.
+    if ($turing) {
+        if ($free -ge 7650) { return 49152 }
+        if ($free -ge 7250) { return 32768 }
+        return 16384
+    }
     if ($free -ge 7950) { return 65536 }
     if ($free -ge 7700) { return 49152 }
     if ($free -ge 7450) { return 32768 }
@@ -107,6 +116,7 @@ function Get-ServerArgs([int]$port, [bool]$head, [bool]$chat) {
     # Radeon 8 and 12 GB: ubatch 256 (less memory, same decode); 12 GB always and 8 GB when its step says so: the draft
     # model's cache in q4_0 (12 GB: --fit picks about 195K instead of 158K for about 1% decode)
     if ($vulkan -and $cfg.tier -in @('8gb', '12gb')) { $a += @('-ub', '256') }
+    if ($turing -and $cfg.tier -eq '8gb') { $a += @('-ub', '256') }
     if ($head) {
         $a += @('--spec-type', 'draft-mtp', '--spec-draft-n-max', "$($cfg.nmax)")
         if ($vulkan -and ($cfg.tier -eq '12gb' -or ($cfg.tier -eq '8gb' -and (Get-Window8gbVulkan).Q4))) { $a += @('-ctkd', 'q4_0', '-ctvd', 'q4_0') }
