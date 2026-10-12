@@ -1,6 +1,6 @@
 # local-ai-on-your-gaming-gpu
 
-Run a 27B local AI on the gaming card you already own: RTX 30, 40 and 50, and AMD Radeon in beta, with 8 GB or more,
+Run a 27B local AI on the gaming card you already own: RTX 20, 30, 40 and 50, and AMD Radeon in beta, with 8 GB or more,
 on Windows and Linux, one line to install.
 
 Windows, in PowerShell:
@@ -21,7 +21,8 @@ in beta, see [Radeon (beta)](#radeon-beta).
 It finds your card, downloads the right build and model from Hugging Face (about 8 GB, every file checked against
 its SHA256) and starts it. Chat in your browser at `http://127.0.0.1:8899`, or point any agent at
 `http://127.0.0.1:8899/v1` (OpenAI compatible, model `bonsai-2-27b`). On Windows a desktop shortcut starts it again
-and `bench-bonsai.bat` measures your card, see [Windows](#windows).
+and `bench-bonsai.bat` measures your card, see [Windows](#windows); on Linux `bench-bonsai.sh` in the install folder
+does the same.
 
 The model today is Ternary Bonsai 2 27B, PrismML's 5.95 GB ternary Qwen 3.8 27B, with the Qwen 3.8 MTP speed head:
 50 tok/s on an RTX 3060 12GB. Windows is in beta until the first real-card runs are in.
@@ -29,7 +30,8 @@ The model today is Ternary Bonsai 2 27B, PrismML's 5.95 GB ternary Qwen 3.8 27B,
 Under the hood: serve lines per VRAM tier with the measured flags, a 1.5x faster decode kernel for the PrismML fork,
 the Qwen 3.8 MTP head grafted back onto the ternary file for lossless speculative decoding, and a sweep table that
 grows by PR. The core numbers were measured on one RTX 3060 12GB, the most owned desktop GPU on Steam (3.92% of
-every surveyed system, August 2026), and the RTX 50 numbers on an RTX 5060 Ti 16GB. Other cards land as rows in
+every surveyed system, August 2026), the RTX 50 numbers on an RTX 5060 Ti 16GB and the RTX 20 numbers on an RTX 2070
+Super 8GB. Other cards land as rows in
 `sweeps/` from their owners.
 
 ## By hand: find your card
@@ -45,8 +47,10 @@ driver only, no compiler. Find your card, take its bundle and script:
 | RTX 5050, 5060, 5060 Ti 8GB | 8 GB | cuda12.8 sm120 | `serve-8gb.sh` | 98K context; 64K with a display |
 | RTX 5070 | 12 GB | cuda12.8 sm120 | `serve-12gb-mtp.sh` | the MTP head, 131K context |
 | RTX 5060 Ti 16GB, 5070 Ti, 5080, 5090 | 16 to 32 GB | cuda12.8 sm120 | `serve-16gb-mtp-vision.sh` | the MTP head, vision and the full 262K |
+| RTX 2060 Super, 2070, 2070 Super, 2080, 2080 Super, 2080 Ti | 8 to 11 GB | cuda12.4 sm75 | `serve-8gb-mtp.sh` with `CTX=49152` | the MTP head, 48K context; 16K if the card also drives your display |
+| RTX 2060 12GB, Titan RTX | 12 / 24 GB | cuda12.4 sm75 | `serve-12gb-mtp.sh` | the MTP head; not measured yet |
 
-Laptop GPUs: the same series, go by your VRAM. Measured so far: RTX 3060 12GB, RTX 3060 Ti 8GB, RTX 4070 12GB (a
+Laptop GPUs: the same series, go by your VRAM. Measured so far: RTX 2070 Super 8GB, RTX 3060 12GB, RTX 3060 Ti 8GB, RTX 4070 12GB (a
 contributor), RTX 5060 Ti 16GB, RTX 5080 16GB (a contributor) and the RTX 3000 Ada Laptop 8GB (a contributor); the other rows follow from the same VRAM
 numbers. The Ada Laptop is the case to read before expecting the kernel's gains: on a bandwidth-bound laptop part the
 PTQ1_0 mat-vec is worth about +7% decode on `bdc23b56b`, while the current PrismML `prism` branch (post-#221) adds +6 to
@@ -112,6 +116,29 @@ at once, four agents with 60K of context each and board power are in the same fi
 No compiler: the Hugging Face repo carries a cuda12.8 sm_120 bundle next to the cuda12.4 one (driver 570 or newer),
 with a `serve-16gb-mtp-vision.sh` for 16GB cards; its README is `serve/prebuilt_README_sm120.md`.
 
+## RTX 20 series (Turing), v1.4
+
+The same v1.1 code, built for sm_75, and both installers now pick it for RTX 20 cards with 8 GB or more. Measured on an
+RTX 2070 Super 8GB (`sweeps/rtx2070super-8gb.md`):
+
+| what | measured |
+| --- | --- |
+| decode, live-stream, 3 x 512 greedy tokens, the 8 GB line (lean file, head n-max 1, ubatch 256, q4_0 K/V) | 52.6 tok/s with the MTP head, 42.6 without |
+| window, card with no display | 48K (7,587 MiB at the peak of a 12,842-token prompt); 64K does not load on 8 GB |
+| window with a desktop on the card (about 700 MiB taken) | 16K |
+| llama-bench, the plain file, head off | tg128 42.3 tok/s, pp512 446.7 tok/s; tg128 33.4 / 19.0 tok/s at 16K / 64K depth |
+| vision | the test chart read right at 16K with `--image-max-tokens 1024`, or at 8K with the full image |
+| the fork's PTQ1_0 test suites on sm_75 | all pass, with and without `GGML_CUDA_BATCH_INVARIANT` |
+
+Two differences from RTX 30 and up. On 8 GB the head drafts one token instead of two: on Turing n-max 1 decodes within 4%
+of n-max 2 with a 150 MiB smaller server, and that buys the 48K window. And the greedy text with the head is not always
+byte-identical to the text without it: `GGML_CUDA_BATCH_INVARIANT=1` does not cover every kernel on Turing, so a near tie
+can flip a token late in an answer (2 of 5 test prompts at n-max 1); the text stays clean. On the same card the CUDA build
+decodes 40% faster than PrismML's Vulkan build (52.6 vs 37.7 tok/s with the head), so RTX 20 stays on CUDA.
+
+On Windows the RTX 20 zip is in beta until a real-card run is in. If you have an RTX 20 card on Windows, run
+`bench-bonsai.bat` once and post the line it gives you in a reply to [@sudoingX](https://x.com/sudoingX) or as a PR.
+
 ## What is here
 
 - `serve/` one script per tier: 8GB at 64K, 12GB at the full 262K, 12GB with the MTP head, 16GB with the
@@ -159,8 +186,9 @@ The GGUF chat template defaults `reasoning_effort` to `xhigh`, which adds a "thi
 
 ## Windows
 
-A native build, no WSL needed, in beta until the first real-card runs are in. Needs Windows 10 or 11 x64, an RTX 30
-or 40 card with NVIDIA driver 551.61 or newer or an RTX 50 card with driver 580 or newer, and about 10 GB of disk.
+A native build, no WSL needed, in beta until the first real-card runs are in. Needs Windows 10 or 11 x64, an RTX 20, 30
+or 40 card with NVIDIA driver 551.61 or newer (RTX 20 in beta, see [RTX 20 series](#rtx-20-series-turing-v14)) or an RTX
+50 card with driver 580 or newer, and about 10 GB of disk.
 
 1. Open PowerShell and paste the line at the top. It installs to `%USERPROFILE%\bonsai2`, makes a desktop shortcut
    "Bonsai 2 27B", starts the model and opens the chat page when it has loaded.
@@ -169,7 +197,8 @@ or 40 card with NVIDIA driver 551.61 or newer or an RTX 50 card with driver 580 
    identical both ways, and on 16 GB and up a chart-reading vision check. It saves the results and copies them to the
    clipboard, ready for a PR with your row.
 
-What it picks: RTX 50 cards get the cuda13.3 sm_120 zip, RTX 30 and 40 the cuda12.4 sm_86 + sm_89 zip, both with the
+What it picks: RTX 50 cards get the cuda13.3 sm_120 zip, RTX 30 and 40 the cuda12.4 sm_86 + sm_89 zip, RTX 20 the
+cuda12.4 sm_75 zip, all with the
 CUDA runtime and the Microsoft C++ runtime inside. 16 GB and up run the MTP file with vision, 12 GB the MTP file, 8 GB
 the lean MTP file with a window picked from free VRAM. From 12 GB up `--fit` sizes the window to the VRAM the desktop
 leaves free.
@@ -256,6 +285,11 @@ reports, and with it which window it gets.
 
 ## Changelog
 
+- **v1.4** (Oct 2026): RTX 20 (Turing). Both installers route compute 7.5 cards with 8 GB or more to a new cuda12.4
+  sm_75 build of the v1.1 code (a Linux bundle and a Windows zip on Hugging Face; Windows in beta until a real-card run):
+  the head drafts 1 token, 8 GB cards get 48K, 32K or 16K by free VRAM with ubatch 256. A Linux speed check for NVIDIA
+  cards (`bench-bonsai.sh`, the same checks as the Windows one and a short line to share) and `BONSAI_HEAD=off` in the
+  Linux start script. The RTX 2070 Super 8GB rows. The RTX 30, 40 and 50 serve lines are unchanged.
 - **v1.3** (Oct 2026): AMD Radeon, in beta. The same two lines install on a Radeon with 8 GB or more and on Ryzen APUs
   with more than 16 GB shared (Strix Halo class), on PrismML's own Vulkan build (`prism-b10772-e8fd209`), no ROCm: 8 GB
   cards get up to 64K (ubatch 256, and the draft model's cache in q4_0 when it buys the bigger window), 12 GB about 195K,
