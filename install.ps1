@@ -24,6 +24,8 @@ function Install-Bonsai2 {
     $builds = @{
         rtx50   = @{ zip = 'bonsai2-small-gpu-windows-x64-cuda13.3-sm120-ff41412';     driver = 580.0;  cards = 'RTX 50' }
         rtx3040 = @{ zip = 'bonsai2-small-gpu-windows-x64-cuda12.4-sm86-sm89-ff41412'; driver = 551.61; cards = 'RTX 30 and 40' }
+        # Turing (RTX 20): the same v1.1 code built for sm_75 (a matrix entry in the fork's bonsai2-windows workflow)
+        rtx20   = @{ zip = 'bonsai2-small-gpu-windows-x64-cuda12.4-sm75-ff41412';     driver = 551.61; cards = 'RTX 20' }
         # AMD Radeon (beta): PrismML's own Windows Vulkan build of the same fork, from its GitHub release, pinned by SHA256
         radeon  = @{ zip = 'llama-prism-b10772-e8fd209-bin-win-vulkan-x64'; cards = 'AMD Radeon, Vulkan'
                      url = 'https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10772-e8fd209/llama-prism-b10772-e8fd209-bin-win-vulkan-x64.zip'
@@ -113,7 +115,8 @@ function Install-Bonsai2 {
     if ($amd) { $b = $builds.radeon }
     elseif ($g.CC -ge 12.0) { $b = $builds.rtx50 }
     elseif ($g.CC -ge 8.6 -and $g.CC -lt 9.0) { $b = $builds.rtx3040 }
-    else { Write-Host ('This card (compute {0}) is not covered by the prebuilt builds yet, they cover RTX 30, 40 and 50.' -f $g.CC.ToString($inv)) -ForegroundColor Red; return }
+    elseif ($g.CC -ge 7.5 -and $g.CC -lt 8.0) { $b = $builds.rtx20 }
+    else { Write-Host ('This card (compute {0}) is not covered by the prebuilt builds yet, they cover RTX 20, 30, 40 and 50.' -f $g.CC.ToString($inv)) -ForegroundColor Red; return }
     if ($amd) {
         # the Vulkan build links the Microsoft C++ runtime and does not carry it; most gaming PCs have it from their games
         $sys32 = Join-Path $env:SystemRoot 'System32'
@@ -142,6 +145,9 @@ function Install-Bonsai2 {
     else { Write-Host ('Bonsai 2 27B needs a card with 8 GB or more, this one has {0} MiB.' -f $g.MiB) -ForegroundColor Red; return }
     # on Vulkan the head drafts 2 tokens on every tier (n-max 2 decoded 15 to 16% faster than n-max 1 on the Radeon 8060S)
     if ($amd) { $nmax = 2 }
+    # RTX 20: the head drafts 1 token on every tier (on an RTX 2070 Super n-max 1 decoded within 5% of n-max 2 with a 150 MiB
+    # smaller server, which buys the 48K window on an 8 GB card)
+    if (-not $amd -and $b -eq $builds.rtx20) { $nmax = 1 }
     $visionNote = if ($vision) { ', with vision' } else { '' }
     Write-Host ('Build:  {0} ({1})' -f $b.zip, $b.cards)
     Write-Host ('Model:  {0}, {1} tier{2}' -f $model, $tier, $visionNote)
