@@ -28,8 +28,8 @@ This is the 5070 Ti row (the repo has no 5070 Ti sweep yet), run on native Windo
 
 ## Build and files
 
-- Installer: `windows/bonsai2.ps1` from `local-ai-on-your-gaming-gpu` (CUDA card path, sets `GGML_CUDA_BATCH_INVARIANT=1`),
-  tier 16gb, MTP file with vision, draft n-max 1.
+- Installer: the repo's root `install.ps1` (release `v1.2-windows`), run from a local copy. It writes the launcher
+  `bonsai2.ps1` (CUDA card path, sets `GGML_CUDA_BATCH_INVARIANT=1`), tier 16gb, MTP file with vision, draft n-max 1.
 - Build: `bonsai2-small-gpu-windows-x64-cuda13.3-sm120-ff41412`, `llama-server` 0.2.0-dev, build 10759 (commit `de947abc3`).
 - `Ternary-Bonsai-2-27B-PTQ1_0-mtp.gguf`, 7,012,820,512 bytes, sha256 `83a396ee…78f70f0`.
 - `Ternary-Bonsai-2-27B-PTQ1_0.gguf` (plain, for llama-bench), 5,946,648,928 bytes, sha256 `53107f53…1fe33ee3`, equal to the hash
