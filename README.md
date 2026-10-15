@@ -18,6 +18,10 @@ curl -fsSL https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-gp
 AMD Radeon with 8 GB or more, and Ryzen APUs like Strix Halo: the same two lines, on Vulkan with no ROCm to install,
 in beta, see [Radeon (beta)](#radeon-beta).
 
+The same installer also carries the uncensored build of the same model, one flag away: `--model offrail` on Linux,
+`$env:BONSAI_MODEL='offrail'` on Windows, or answer the question it asks. See
+[Uncensored: Offrail 27B](#uncensored-offrail-27b).
+
 It finds your card, downloads the right build and model from Hugging Face (about 8 GB, every file checked against
 its SHA256) and starts it. Chat in your browser at `http://127.0.0.1:8899`, or point any agent at
 `http://127.0.0.1:8899/v1` (OpenAI compatible, model `bonsai-2-27b`). On Windows a desktop shortcut starts it again
@@ -33,6 +37,39 @@ grows by PR. The core numbers were measured on one RTX 3060 12GB, the most owned
 every surveyed system, August 2026), the RTX 50 numbers on an RTX 5060 Ti 16GB and the RTX 20 numbers on an RTX 2070
 Super 8GB. Other cards land as rows in
 `sweeps/` from their owners.
+
+## Uncensored: Offrail 27B
+
+The same installer, the same bundles, the same MTP head, with the uncensored weights of the same model instead of
+PrismML's: OS-Software's Heretic build of ternary Qwen 3.8 27B. It answers what the standard build refuses, so use it
+where that is what you want. Everything else is unchanged: the tiers, the window steps, the vision tower, the speed
+check.
+
+Windows, in PowerShell:
+
+```
+$env:BONSAI_MODEL='offrail'; irm https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-gpu/main/install.ps1 | iex
+```
+
+Linux or WSL2:
+
+```
+curl -fsSL https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-gpu/main/install.sh | bash -s -- --model offrail
+```
+
+With a terminal the installers ask which build, and `1` (or Enter) is the standard one, so nothing changes for anyone
+who does not answer `2`. On Linux `BONSAI_MODEL=offrail` does the same as the flag; `BONSAI_NO_PROMPT=1` keeps the
+standard build and never asks.
+
+The weights come from [sudoingx/Offrail-27B-Uncensored](https://huggingface.co/sudoingx/Offrail-27B-Uncensored), its own
+repo with its own SHA256SUMS, in the standard build's two sizes: `Offrail-27B-12G.gguf` on 12 GB and up (16 GB and up
+with vision), `Offrail-27B-8G.gguf` on 8 GB. The bundles, the 8 GB window steps and the vision file are the standard
+build's, so the tiers behave the same.
+
+Measured on an RTX 3060 12GB: 50.8 tok/s with the MTP head at 131K context, 41.4 without, 10,618 MiB served, and the
+greedy text identical with and without the head, like the standard build's rows. The chat model is `offrail-27b`, where
+the standard build is `bonsai-2-27b`; the desktop shortcut and both `.bat` titles say Offrail 27B, and the speed check
+saves `offrail-results-*.txt`, so a row from it cannot be read as a standard-build row.
 
 ## By hand: find your card
 
@@ -77,6 +114,11 @@ cd ~/models/bonsai2-27b && tar xzf bonsai2-small-gpu-linux-x64-cuda12.4-sm86-sm8
 On 8GB cards take `Ternary-Bonsai-2-27B-PTQ1_0.gguf` from `prism-ml/Ternary-Bonsai-2-27B-gguf` instead and run
 `serve-8gb.sh`. Then open `http://localhost:8899`: the llama.cpp chat UI, and an OpenAI-compatible API at `/v1`.
 
+By hand with the uncensored build: the same bundles and serve scripts, but the model file from
+[sudoingx/Offrail-27B-Uncensored](https://huggingface.co/sudoingx/Offrail-27B-Uncensored), `Offrail-27B-12G.gguf` on
+12 GB and up or `Offrail-27B-8G.gguf` on 8 GB, and add `--alias offrail-27b` if you want the API model name to match
+what the installer sets.
+
 What you need: Linux x86-64 (on Windows, the one line at the top, or WSL2) and `hf` (`pip install -U huggingface_hub`). The RTX 50
 bundle wants NVIDIA driver 570 or newer and Ubuntu 24.04 or newer (glibc 2.38); the RTX 30 and 40 bundle wants driver
 525 or newer and Ubuntu 22.04 or newer. On a card that also drives your display, start with a smaller window:
@@ -95,7 +137,8 @@ Decode by filled context, same two builds: fresh 26.4 to 40.5 tok/s (1.53x), 16K
 
 With the MTP head grafted on and `GGML_CUDA_BATCH_INVARIANT=1`, `--spec-type draft-mtp --spec-draft-n-max 1`
 runs at 50.1 tok/s median over code, prose and bash (code 53.2), and greedy output equals greedy output
-without the flag on all three prompts. Details and every run: `results/KERNEL_REPORT.md`.
+without the flag on all three prompts. Details and every run: `results/KERNEL_REPORT.md`. The uncensored build's
+own rows are in [Uncensored: Offrail 27B](#uncensored-offrail-27b).
 
 ## RTX 50 series (Blackwell), v1.1
 
@@ -203,6 +246,11 @@ CUDA runtime and the Microsoft C++ runtime inside. 16 GB and up run the MTP file
 the lean MTP file with a window picked from free VRAM. From 12 GB up `--fit` sizes the window to the VRAM the desktop
 leaves free.
 
+Either build: the standard model, or the uncensored one with `$env:BONSAI_MODEL='offrail'` set before the line. The
+installer asks which build when a console is attached and takes the standard one when nothing answers, and the
+shortcut, both `.bat` titles and the speed check's results file are named after what it installed ("Bonsai 2 27B" or
+"Offrail 27B").
+
 Agents on another machine or in WSL2: `setx BONSAI_HOST 0.0.0.0` and `setx BONSAI_API_KEY <your key>`, start it
 again, then use `http://<this pc>:8899/v1` with that key. Without them it only listens on this PC.
 
@@ -221,6 +269,10 @@ there is no ROCm to install: Vulkan comes with the AMD driver on Windows and wit
 own build of the same fork (release `prism-b10772-e8fd209`, Linux and Windows x64, pinned to its SHA256 and downloaded
 from PrismML's GitHub release), with the same model files and the same MTP head. Our CUDA decode kernel is NVIDIA only;
 on Vulkan, PrismML's own PTQ1_0 shader does the work.
+
+Both builds install the same way on a Radeon: add `--model offrail` on Linux or set `$env:BONSAI_MODEL='offrail'` on
+Windows. The memory steps below are the same for it, since its two files are the standard build's sizes; its speed on a
+Radeon is not measured yet, like every row in the tables below.
 
 Find your card:
 
@@ -285,6 +337,15 @@ reports, and with it which window it gets.
 
 ## Changelog
 
+- **v1.5** (Oct 2026): the uncensored build. Both installers take `--model offrail` on Linux or `BONSAI_MODEL=offrail`
+  on Windows, and ask which build once when a terminal is attached; the default is the standard build, unchanged. The
+  uncensored weights and their own SHA256SUMS come from the sibling repo `sudoingx/Offrail-27B-Uncensored`; the bundles,
+  the vision file and the window steps stay where they are, and its chat model is `offrail-27b`, with the desktop
+  shortcut, both `.bat` titles and the speed check's results file following it. The standard build's output is
+  byte-identical to v1.4 on both platforms and both vendors (the CI compares it against `main` on every run), and the CI
+  grew five uncensored rows per platform plus a step that runs the real download, verify and unpack code against two
+  fake repos, because the test mode skips downloads. Measured on an RTX 3060 12GB: 50.8 tok/s with the head at 131K,
+  the same greedy-text identity as the standard build.
 - **v1.4** (Oct 2026): RTX 20 (Turing). Both installers route compute 7.5 cards with 8 GB or more to a new cuda12.4
   sm_75 build of the v1.1 code (a Linux bundle and a Windows zip on Hugging Face; Windows in beta until a real-card run):
   the head drafts 1 token, 8 GB cards get 48K, 32K or 16K by free VRAM with ubatch 256. A Linux speed check for NVIDIA
@@ -311,4 +372,6 @@ reports, and with it which window it gets.
 
 ## Licence
 
-Apache 2.0. Ternary Bonsai 2 27B is PrismML's, Apache 2.0; the MTP head comes from Qwen3.8-27B, Apache 2.0.
+Apache 2.0. Ternary Bonsai 2 27B is PrismML's, Apache 2.0; the MTP head comes from Qwen3.8-27B, Apache 2.0. The
+uncensored build ships OS-Software's Heretic weights of the same model, Apache 2.0, from
+`sudoingx/Offrail-27B-Uncensored`.
