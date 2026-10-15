@@ -259,7 +259,7 @@ jobs:
           - { card: 'RTX 5060 Ti 16GB (offrail)', gpu: '0, NVIDIA GeForce RTX 5060 Ti, 16311, 595.95, 12.0', tier: '16gb', bundle: 'cuda12.8-sm120', nmax: '1', variant: 'offrail', alias: 'offrail-27b' }
           - { card: 'RTX 3000 Ada Laptop 8GB (offrail)', gpu: '0, NVIDIA RTX 3000 Ada Generation Laptop GPU, 8188, 595.95, 8.9', tier: '8gb', bundle: 'cuda12.4-sm86-sm89', nmax: '2', ctx8: '49152', lean: 'Offrail-27B-8G', variant: 'offrail', alias: 'offrail-27b' }
           - { card: 'Radeon RX 7600 8GB (offrail)', drm: 'card1 0x1002 8176 15000 AMD Radeon RX 7600',
-              vk: '  Vulkan0: AMD Radeon RX 7600 (RADV NAVI33) (8176 MiB, 7476 MiB free)', tier: '8gb', dev: 'Vulkan0', ctx8: '49152', dq: 'yes', variant: 'offrail', alias: 'offrail-27b' }
+              vk: '  Vulkan0: AMD Radeon RX 7600 (RADV NAVI33) (8176 MiB, 7476 MiB free)', tier: '8gb', dev: 'Vulkan0', ctx8: '49152', dq: 'yes', lean: 'Offrail-27B-8G', variant: 'offrail', alias: 'offrail-27b' }
           - { card: 'GTX 1660 Super 6GB (refused, offrail)', gpu: '0, NVIDIA GeForce GTX 1660 SUPER, 6144, 595.95, 7.5', tier: 'none', bundle: 'none', variant: 'offrail', alias: 'offrail-27b' }
           # Radeons: drm = 'cardN vendor VRAM-MiB GTT-MiB name' per card, vk = what the Vulkan build lists at start
           - { card: 'Radeon RX 7600 8GB, desktop on it', drm: 'card1 0x1002 8176 15000 AMD Radeon RX 7600',
