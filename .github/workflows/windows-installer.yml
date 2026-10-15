@@ -299,6 +299,7 @@ jobs:
           BONSAI_DRM: ${{ runner.temp }}/drm
           BONSAI_VK_ICD_DIR: ${{ matrix.icd }}
           BONSAI_TEST: '1'
+          BONSAI_MODEL: ${{ matrix.variant }}
           BONSAI_DIR: ${{ runner.temp }}/bonsai2
         run: |
           bash -n install.sh
@@ -309,10 +310,10 @@ jobs:
           cat "$BONSAI_DIR/start-bonsai.sh"
           grep -q 'draft-mtp' "$BONSAI_DIR/start-bonsai.sh"
           WANT_ALIAS='${{ matrix.alias }}'; [ -n "$WANT_ALIAS" ] || WANT_ALIAS='bonsai-2-27b'
-          grep -q -- "--alias $WANT_ALIAS" "$BONSAI_DIR/start-bonsai.sh"
           LEAN='${{ matrix.lean }}'; [ -n "$LEAN" ] || LEAN='mtp-lean'
           SLUG='bonsai2'; [ -z '${{ matrix.variant }}' ] || SLUG='offrail'
           if [ -z '${{ matrix.drm }}' ]; then
+            grep -q -- "--alias $WANT_ALIAS" "$BONSAI_DIR/start-bonsai.sh"
             grep -q '${{ matrix.bundle }}' "$BONSAI_DIR/start-bonsai.sh"
             case '${{ matrix.tier }}' in
               8gb)  grep -q 'C=49152' "$BONSAI_DIR/start-bonsai.sh" && grep -q "$LEAN" "$BONSAI_DIR/start-bonsai.sh" ;;
@@ -360,6 +361,10 @@ jobs:
             chmod +x "$B/llama-server"
             out=$(FAKE_VK='${{ matrix.vk }}' bash "$BONSAI_DIR/start-bonsai.sh"); echo "$out"
             args=$(grep '^SERVER ARGS:' <<< "$out")
+            # the Radeon script is written from a quoted heredoc, so it passes the model name through API_ALIAS:
+            # check the variable it bakes and the arguments llama-server really receives
+            grep -q "API_ALIAS=$WANT_ALIAS" "$BONSAI_DIR/start-bonsai.sh"
+            grep -q -- "--alias $WANT_ALIAS " <<< "$args"
             grep -q -- '--device ${{ matrix.dev }} ' <<< "$args"
             grep -q -- '--spec-draft-n-max 2' <<< "$args"
             case '${{ matrix.tier }}' in
@@ -490,8 +495,11 @@ jobs:
               $text = & { Get-Content "$hub\install.ps1" -Raw | Invoke-Expression } *>&1 | Out-String
               foreach ($f in 'bonsai2.json', 'start-bonsai.bat', 'bench-bonsai.bat') { if (Test-Path "$d\$f") { $text += [IO.File]::ReadAllText("$d\$f") } }
               if (Test-Path "$d\bonsai2.ps1") { $text += (powershell -NoProfile -ExecutionPolicy Bypass -File "$d\bonsai2.ps1" print | Out-String) }
-              # the one intended change: the repo was renamed from local-ai-on-your-gaming-rtx in v1.3
-              $got[$side] = $text.Replace('local-ai-on-your-gaming-rtx', 'local-ai-on-your-gaming-gpu')
+              # the intended changes: the repo rename of v1.3, and bonsai2.json gaining the build's own names
+              # (variant, name, alias, slug) so the uncensored build can label itself
+              $norm = $text.Replace('local-ai-on-your-gaming-rtx', 'local-ai-on-your-gaming-gpu')
+              $norm = [regex]::Replace($norm, '(?m)^\s*"(variant|name|alias|slug)":\s*".*?",?\r?\n', '')
+              $got[$side] = $norm
               if (Test-Path $d) { Rename-Item $d "nv-$side-$([array]::IndexOf($cards, $card))" }
             }
             $name = if ($card) { $card } else { 'no NVIDIA card, no Radeon' }
