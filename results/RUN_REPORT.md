@@ -15,14 +15,14 @@ Inputs: Bonsai 2 `Ternary-Bonsai-2-27B-PTQ1_0.gguf` 5,946,648,928 bytes, 851 ten
 sha256 `53107f53...ee3` (unchanged, verified before and after). Donor pulled on the node:
 `unsloth/Qwen3.8-27B-GGUF` `Qwen3.8-27B-UD-Q4_K_M.gguf`, 16,464,440,224 bytes,
 sha256 `322e194ff79741c7baa497c240f677f54b201b0efab44ca8e50f122b39123482` (the plain
-Q4_K_M that beast holds is no longer in the repo; the UD file has the same 15 head tensors in
+Q4_K_M we had is no longer in the repo; the UD file has the same 15 head tensors in
 Q6_K/Q8_0/F32 instead of Q4_K/Q6_K/Q8_0). Head files: `qwen38-27b-nextn-head.gguf`
 1,066,172,160 bytes (16 tensors, sha256 `89a3144a...956`), `qwen38-27b-nextn-head-lean.gguf`
 351,010,464 bytes (15 tensors, sha256 `4c696d34...d64`), both in `/root/mtp-graft/`.
 
 Round trip: `merge.py --strip` on the merged file reproduces the original Bonsai 2 sha256
 byte for byte (results/node/node_strip.txt). pytest: 16 passed on the node (with both real
-files), 15 passed and 1 skipped on beast (no Bonsai file there).
+files), 15 passed and 1 skipped on a second machine (no Bonsai file there).
 
 Largest context with the head resident:
 
@@ -209,7 +209,8 @@ files left on the node: the two merged GGUFs and two head GGUFs listed above, th
 (16.5 GB) in `/root/models/qwen3.8-27b/`, the 9B diagnostic model (5.4 GB) in
 `/root/models/diag/`, the fork source and build in `/root/llama.cpp-sudo` (branch `bonsai2-mtp`,
 uncommitted nothing), scripts and results in `/root/mtp-graft/`, server logs in `~/server_*.log`.
-33 GB disk free. Original Bonsai 2 file and its SHA256SUMS untouched. `~/.hermes` untouched.
+33 GB disk free. Original Bonsai 2 file and its SHA256SUMS untouched. Nothing outside the working
+directories was touched.
 
 ## The read
 
