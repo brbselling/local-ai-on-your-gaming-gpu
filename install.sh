@@ -5,6 +5,11 @@
 # from Hugging Face, checks every SHA256, writes start-bonsai.sh next to them and starts it.
 # AMD Radeon (beta): with no NVIDIA card it looks for a Radeon and takes PrismML's Vulkan build instead.
 # Optional: BONSAI_DIR (default ~/models/bonsai2-27b), BONSAI_PORT (default 8899), BONSAI_NO_START=1.
+#
+# Two builds, one script. The default is Bonsai 2 27B, the standard build. `--model offrail` (or
+# BONSAI_MODEL=offrail) installs Offrail 27B instead: the uncensored build, the same stack with
+# OS-Software's Heretic weights (answers what the base refuses). With a terminal the installer asks once;
+# `curl | bash` has no terminal, so it takes the default and never blocks. BONSAI_NO_PROMPT=1 skips the question.
 set -euo pipefail
 
 main() {
@@ -16,8 +21,45 @@ main() {
   local mmproj_sha=6807ede61d570bb86ba34b756a0fa109edc33668604de867c6ea6d8f1d631903
   local test="${BONSAI_TEST:-}"
 
+  # ---- which build: base (default) or offrail ----
+  # --model base|offrail, BONSAI_MODEL=..., or one question when there is a terminal (/dev/tty, because a
+  # piped script owns stdin). No terminal = base. BONSAI_OFFRAIL_HF is the test hook for the second repo.
+  variant="${BONSAI_MODEL:-}"; local variant_set=0 arg j=0
+  if [ -n "${BONSAI_MODEL:-}" ]; then variant_set=1; fi
+  local -a argv=("$@")
+  while [ "$j" -lt "${#argv[@]}" ]; do
+    arg="${argv[$j]}"
+    case "$arg" in
+      --model)   j=$((j + 1)); variant="${argv[$j]:-}"; variant_set=1 ;;
+      --model=*) variant="${arg#*=}"; variant_set=1 ;;
+    esac
+    j=$((j + 1))
+  done
+  case "$variant" in
+    ''|base|bonsai|normal)  variant=base ;;
+    offrail|uncensored)     variant=offrail ;;
+    *) echo "--model takes base or offrail, not '$variant'."; return 1 ;;
+  esac
+  if [ "$variant_set" = 0 ] && [ -z "${BONSAI_NO_PROMPT:-}" ] && [ -z "$test" ] && [ -r /dev/tty ]; then
+    echo
+    echo "Which model?"
+    echo "  1) Bonsai 2 27B   the standard build (default)"
+    echo "  2) Offrail 27B    the uncensored build, answers what the base refuses"
+    printf "Choice [1]: "
+    local answer=''; read -r answer < /dev/tty || answer=''
+    case "$answer" in 2|offrail|uncensored|o|O) variant=offrail ;; *) variant=base ;; esac
+    echo
+  fi
+  # globals on purpose: radeon() has its own scope and needs the same picks
+  model_hf="$hf"; vname='Bonsai 2 27B'
+  api_alias=bonsai-2-27b; slug=bonsai2
+  if [ "$variant" = offrail ]; then
+    model_hf=${BONSAI_OFFRAIL_HF:-https://huggingface.co/sudoingx/Offrail-27B-Uncensored/resolve/main}
+    vname='Offrail 27B'; api_alias=offrail-27b; slug=offrail
+  fi
+
   echo
-  echo "Bonsai 2 27B for small GPUs, Linux installer"
+  echo "$vname for small GPUs, Linux installer"
   echo "github.com/sudoingX/local-ai-on-your-gaming-gpu"
   echo
 
@@ -66,10 +108,17 @@ main() {
 
   # 3. the model file for this much VRAM
   local tier model vision nmax
-  if   [ "$mib" -ge 15000 ]; then tier=16gb; model=Ternary-Bonsai-2-27B-PTQ1_0-mtp.gguf;      vision=1; nmax=1
+  if [ "$variant" = offrail ]; then
+    # Offrail: the same shapes as the base (its two files are the base's sizes: 7,012,820,544 and 6,297,658,848)
+    if   [ "$mib" -ge 15000 ]; then tier=16gb; model=Offrail-27B-12G.gguf; vision=1; nmax=1
+    elif [ "$mib" -ge 11500 ]; then tier=12gb; model=Offrail-27B-12G.gguf; vision=0; nmax=1
+    elif [ "$mib" -ge 7500 ];  then tier=8gb;  model=Offrail-27B-8G.gguf;  vision=0; nmax=2
+    else echo "$vname needs a card with 8 GB or more, this one has $mib MiB."; return 1
+    fi
+  elif [ "$mib" -ge 15000 ]; then tier=16gb; model=Ternary-Bonsai-2-27B-PTQ1_0-mtp.gguf;      vision=1; nmax=1
   elif [ "$mib" -ge 11500 ]; then tier=12gb; model=Ternary-Bonsai-2-27B-PTQ1_0-mtp.gguf;      vision=0; nmax=1
   elif [ "$mib" -ge 7500 ];  then tier=8gb;  model=Ternary-Bonsai-2-27B-PTQ1_0-mtp-lean.gguf; vision=0; nmax=2
-  else echo "Bonsai 2 27B needs a card with 8 GB or more, this one has $mib MiB."; return 1
+  else echo "$vname needs a card with 8 GB or more, this one has $mib MiB."; return 1
   fi
   # RTX 20: the head drafts 1 token on every tier. On an RTX 2070 Super n-max 1 decoded within 5% of n-max 2 and its server is
   # 150 MiB smaller, which buys the 48K window on an 8 GB card
@@ -86,9 +135,16 @@ main() {
     local free_kb; free_kb=$(df -Pk "$dir" | awk 'NR == 2 { print $4 }')
     if [ "$free_kb" -lt $((need_gb * 1024 * 1024)) ]; then echo "Not enough disk space in $dir: about $need_gb GB is needed."; return 1; fi
 
-    # 4. downloads, every file checked against its SHA256
-    local sums; sums=$(curl -fsSL "$hf/SHA256SUMS")
-    want() { awk -v f="$1" '$2 == f || $2 == "*" f { print $1 }' <<< "$sums"; }
+    # 4. downloads, every file checked against its SHA256. The bundles and the base build's weights come from
+    # the base repo; Offrail ships its own SHA256SUMS in its own repo, so both manifests are searched.
+    local sums ms; sums=$(curl -fsSL "$hf/SHA256SUMS")
+    ms=''
+    if [ "$variant" = offrail ]; then
+      ms=$(curl -fsSL "$model_hf/SHA256SUMS") || { echo "could not read SHA256SUMS from the Offrail repo"; return 1; }
+    fi
+    # head -1: if a name ever appeared in both manifests, take one hash, not two lines
+    want() { awk -v f="$1" '$2 == f || $2 == "*" f { print $1 }' <<< "$sums
+$ms" | head -1; }
     get() { # url file sha
       local url=$1 path=$2 sha=$3 leaf; leaf=$(basename "$2")
       if [ -f "$path" ] && [ "$(sha256sum "$path" | cut -d' ' -f1)" = "$sha" ]; then echo "  ok    $leaf (already here)"; return; fi
@@ -106,7 +162,7 @@ main() {
       echo "  ok    $bundle (already unpacked)"
     fi
     if [ -z "$skip_model" ]; then
-      get "$hf/$model" "$dir/$model" "$(want "$model")"
+      get "$model_hf/$model" "$dir/$model" "$(want "$model")"
       if [ "$vision" = 1 ]; then get "$prism/$mmproj" "$dir/$mmproj" "$mmproj_sha"; fi
     fi
     # the chart the speed check's vision step reads (16 GB), from this repo
@@ -135,7 +191,7 @@ CTX_ARGS=(-c "$C" --fit off)'
   [ "$vision" = 1 ] && mm_arg="--mmproj \"\$DIR/$mmproj\""
   cat > "$dir/start-bonsai.sh" <<EOF
 #!/bin/bash
-# Bonsai 2 27B, written by install.sh for $name ($mib MiB), $tier tier. Chat page: http://127.0.0.1:\${BONSAI_PORT:-$port}
+# $vname, written by install.sh for $name ($mib MiB), $tier tier. Chat page: http://127.0.0.1:\${BONSAI_PORT:-$port}
 set -eu
 DIR="\$(cd "\$(dirname "\$0")" && pwd)"
 B="\$DIR/$bundle"
@@ -148,8 +204,8 @@ $ctx_line
 # the speed head drafts $nmax tokens; BONSAI_HEAD=off runs without it (the speed check uses that for its second pass)
 HEAD_ARGS=(--spec-type draft-mtp --spec-draft-n-max $nmax); [ "\${BONSAI_HEAD:-on}" = off ] && HEAD_ARGS=()
 echo "NVIDIA: GPU \$CUDA_VISIBLE_DEVICES, \$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits -i "\$CUDA_VISIBLE_DEVICES" 2>/dev/null | head -1) MiB free"
-echo "Chat page: http://127.0.0.1:\$PORT   API for agents: http://127.0.0.1:\$PORT/v1 (OpenAI compatible, model bonsai-2-27b)"
-exec "\$B/bin/llama-server" -m "\$DIR/$model" $mm_arg -ngl 99 -fa on -np 1 -ctk q4_0 -ctv q4_0 --jinja --alias bonsai-2-27b \\
+echo "Chat page: http://127.0.0.1:\$PORT   API for agents: http://127.0.0.1:\$PORT/v1 (OpenAI compatible, model $api_alias)"
+exec "\$B/bin/llama-server" -m "\$DIR/$model" $mm_arg -ngl 99 -fa on -np 1 -ctk q4_0 -ctv q4_0 --jinja --alias $api_alias \\
   --reasoning-effort medium --temp 1.0 --top-p 0.95 --top-k 20 --host "\$HOST" --port "\$PORT" \\
   "\${CTX_ARGS[@]}" \${KEY_ARGS[@]+"\${KEY_ARGS[@]}"} \${HEAD_ARGS[@]+"\${HEAD_ARGS[@]}"} "\$@"
 EOF
@@ -162,7 +218,7 @@ EOF
   echo "Start it:         $dir/start-bonsai.sh"
   echo "Check your speed: $dir/bench-bonsai.sh, it saves your results and prints a short line to share"
   echo "Chat page:        http://127.0.0.1:$port"
-  echo "API for agents:   http://127.0.0.1:$port/v1 (OpenAI compatible, model bonsai-2-27b, any API key)"
+  echo "API for agents:   http://127.0.0.1:$port/v1 (OpenAI compatible, model $api_alias, any API key)"
   if [ -z "$test" ] && [ -z "${BONSAI_NO_START:-}" ]; then
     echo; echo "Starting it now, Ctrl+C stops it."; echo
     exec "$dir/start-bonsai.sh"
@@ -234,14 +290,20 @@ radeon() {
   # 3. the model file: the same tiers as NVIDIA; on Vulkan the head drafts 2 tokens on every tier (n-max 2 decoded 15 to 16%
   # faster than n-max 1 with both files on the Radeon 8060S), and the 8 GB windows were measured on Vulkan
   local tier model vision nmax
-  if   [ "$apu" = 1 ] || [ "$mib" -ge 15000 ]; then tier=16gb; model=Ternary-Bonsai-2-27B-PTQ1_0-mtp.gguf; vision=1; nmax=2
+  if [ "$variant" = offrail ]; then
+    if   [ "$apu" = 1 ] || [ "$mib" -ge 15000 ]; then tier=16gb; model=Offrail-27B-12G.gguf; vision=1; nmax=2
+    elif [ "$mib" -ge 11500 ]; then tier=12gb; model=Offrail-27B-12G.gguf; vision=0; nmax=2
+    elif [ "$mib" -ge 7500 ];  then tier=8gb;  model=Offrail-27B-8G.gguf;  vision=0; nmax=2
+    else echo "$vname needs a card with 8 GB or more, this one has $mib MiB."; return 1
+    fi
+  elif [ "$apu" = 1 ] || [ "$mib" -ge 15000 ]; then tier=16gb; model=Ternary-Bonsai-2-27B-PTQ1_0-mtp.gguf; vision=1; nmax=2
   elif [ "$mib" -ge 11500 ]; then tier=12gb; model=Ternary-Bonsai-2-27B-PTQ1_0-mtp.gguf;      vision=0; nmax=2
   elif [ "$mib" -ge 7500 ];  then tier=8gb;  model=Ternary-Bonsai-2-27B-PTQ1_0-mtp-lean.gguf; vision=0; nmax=2
   elif [ "$mib" -lt 2048 ]; then
-    echo "This Radeon has $mib MiB of its own memory and $gtt MiB shared (GTT). Bonsai 2 27B needs a card with 8 GB or more,"
+    echo "This Radeon has $mib MiB of its own memory and $gtt MiB shared (GTT). $vname needs a card with 8 GB or more,"
     echo "or an APU with more than 16 GB of GTT (32 GB of RAM or more)."
     return 1
-  else echo "Bonsai 2 27B needs a card with 8 GB or more, this one has $mib MiB."; return 1
+  else echo "$vname needs a card with 8 GB or more, this one has $mib MiB."; return 1
   fi
   echo "Build:  $build (PrismML, Vulkan)"
   echo "Model:  $model, $tier tier$([ "$vision" = 1 ] && echo ', with vision')"
@@ -256,8 +318,15 @@ radeon() {
     if [ "$free_kb" -lt $((need_gb * 1024 * 1024)) ]; then echo "Not enough disk space in $dir: about $need_gb GB is needed."; return 1; fi
 
     # 4. downloads: the build from PrismML's GitHub release, the model from Hugging Face, every file checked against its SHA256
-    local sums; sums=$(curl -fsSL "$hf/SHA256SUMS")
-    want() { awk -v f="$1" '$2 == f || $2 == "*" f { print $1 }' <<< "$sums"; }
+    # the model file comes from the variant's repo: Offrail ships its own SHA256SUMS, so both are searched
+    local sums ms; sums=$(curl -fsSL "$hf/SHA256SUMS")
+    ms=''
+    if [ "$variant" = offrail ]; then
+      ms=$(curl -fsSL "$model_hf/SHA256SUMS") || { echo "could not read SHA256SUMS from the Offrail repo"; return 1; }
+    fi
+    # head -1: if a name ever appeared in both manifests, take one hash, not two lines
+    want() { awk -v f="$1" '$2 == f || $2 == "*" f { print $1 }' <<< "$sums
+$ms" | head -1; }
     get() { # url file sha
       local url=$1 path=$2 sha=$3 leaf; leaf=$(basename "$2")
       if [ -f "$path" ] && [ "$(sha256sum "$path" | cut -d' ' -f1)" = "$sha" ]; then echo "  ok    $leaf (already here)"; return; fi
@@ -281,7 +350,7 @@ radeon() {
       return 1
     fi
     if [ -z "$skip_model" ]; then
-      get "$hf/$model" "$dir/$model" "$(want "$model")"
+      get "$model_hf/$model" "$dir/$model" "$(want "$model")"
       if [ "$vision" = 1 ]; then get "$prism/$mmproj" "$dir/$mmproj" "$mmproj_sha"; fi
     fi
     # the chart the speed check's vision step reads (16 GB and APUs), from this repo
@@ -296,12 +365,12 @@ radeon() {
   {
     cat <<EOF
 #!/bin/bash
-# Bonsai 2 27B, written by install.sh for $name ($mib MiB$([ "$apu" = 1 ] && echo ", APU with $gtt MiB GTT")), $tier tier, AMD Radeon beta on Vulkan.
+# $vname, written by install.sh for $name ($mib MiB$([ "$apu" = 1 ] && echo ", APU with $gtt MiB GTT")), $tier tier, AMD Radeon beta on Vulkan.
 # Chat page: http://127.0.0.1:\${BONSAI_PORT:-$port}
 set -eu
 DIR="\$(cd "\$(dirname "\$0")" && pwd)"
 B="\$DIR/$build"
-MODEL=$model MMPROJ=$([ "$vision" = 1 ] && echo "$mmproj") TIER=$tier NMAX=$nmax CARD_MIB=$mib APU=$apu
+MODEL=$model MMPROJ=$([ "$vision" = 1 ] && echo "$mmproj") TIER=$tier NMAX=$nmax CARD_MIB=$mib APU=$apu API_ALIAS=$api_alias
 PORT="\${BONSAI_PORT:-$port}"
 EOF
     cat <<'EOF'
@@ -343,9 +412,9 @@ fi
 # the speed head drafts NMAX tokens; BONSAI_HEAD=off runs without it (the speed check uses that for its second pass)
 HEAD_ARGS=(--spec-type draft-mtp --spec-draft-n-max "$NMAX" ${DRAFT_ARGS[@]+"${DRAFT_ARGS[@]}"}); [ "${BONSAI_HEAD:-on}" = off ] && HEAD_ARGS=()
 echo "Radeon: $DEV, $FREE MiB free"
-echo "Chat page: http://127.0.0.1:$PORT   API for agents: http://127.0.0.1:$PORT/v1 (OpenAI compatible, model bonsai-2-27b)"
+echo "Chat page: http://127.0.0.1:$PORT   API for agents: http://127.0.0.1:$PORT/v1 (OpenAI compatible, model $API_ALIAS)"
 exec "$B/llama-server" -m "$DIR/$MODEL" ${MM_ARGS[@]+"${MM_ARGS[@]}"} --device "$DEV" -ngl 99 -fa on -np 1 -ctk q4_0 -ctv q4_0 --jinja \
-  --alias bonsai-2-27b --reasoning-effort medium --temp 1.0 --top-p 0.95 --top-k 20 --host "$HOST" --port "$PORT" \
+  --alias "$API_ALIAS" --reasoning-effort medium --temp 1.0 --top-p 0.95 --top-k 20 --host "$HOST" --port "$PORT" \
   "${CTX_ARGS[@]}" ${KEY_ARGS[@]+"${KEY_ARGS[@]}"} ${HEAD_ARGS[@]+"${HEAD_ARGS[@]}"} "$@"
 EOF
   } > "$dir/start-bonsai.sh"
@@ -378,7 +447,7 @@ speed_check() {
 # About 3 to 5 minutes: the model starts on port 8091 with the speed head, then without it, and runs the same prompts as every
 # row in github.com/sudoingX/local-ai-on-your-gaming-gpu. Stop the chat first (Ctrl+C in its window).
 DIR="\$(cd "\$(dirname "\$0")" && pwd)"
-export DIR CARD_NAME=$(printf %q "$name") CARD_MIB=$mib APU=$apu TIER=$tier NMAX=$nmax MODEL=$model MMPROJ=$([ "$vision" = 1 ] && echo "$mmproj") BUILD=$build RELEASE=prism-b10772-e8fd209
+export DIR CARD_NAME=$(printf %q "$name") VARIANT_NAME=$(printf %q "$vname") VARIANT_SLUG=$slug CARD_MIB=$mib APU=$apu TIER=$tier NMAX=$nmax MODEL=$model MMPROJ=$([ "$vision" = 1 ] && echo "$mmproj") BUILD=$build RELEASE=prism-b10772-e8fd209
 EOF
   else
     cat <<EOF
@@ -387,7 +456,7 @@ EOF
 # About 3 to 5 minutes: the model starts on port 8091 with the speed head, then without it, and runs the same prompts as every
 # row in github.com/sudoingX/local-ai-on-your-gaming-gpu. Stop the chat first (Ctrl+C in its window).
 DIR="\$(cd "\$(dirname "\$0")" && pwd)"
-export DIR BACKEND=nvidia CARD_NAME=$(printf %q "$name") CARD_MIB=$mib GPU_IDX=$idx CC=$cc DRIVER=$driver APU=0 TIER=$tier NMAX=$nmax MODEL=$model MMPROJ=$([ "$vision" = 1 ] && echo "$mmproj") BUILD=$bundle RELEASE=bonsai2-v1.1
+export DIR BACKEND=nvidia CARD_NAME=$(printf %q "$name") VARIANT_NAME=$(printf %q "$vname") VARIANT_SLUG=$slug CARD_MIB=$mib GPU_IDX=$idx CC=$cc DRIVER=$driver APU=0 TIER=$tier NMAX=$nmax MODEL=$model MMPROJ=$([ "$vision" = 1 ] && echo "$mmproj") BUILD=$bundle RELEASE=bonsai2-v1.1
 EOF
   fi
   cat <<'EOF'
@@ -517,7 +586,7 @@ def mesa():
 if shutil.which('pgrep') and subprocess.run(['pgrep', '-x', 'llama-server'], stdout=subprocess.DEVNULL).returncode == 0:
     sys.exit('Bonsai (or another llama-server) is running, stop it first (Ctrl+C in its window), then run the speed check again.')
 stamp = time.strftime('%Y-%m-%d %H:%M')
-print('Bonsai 2 27B speed check, about 3 to 5 minutes. Close games and video apps first.', flush=True)
+print(f"{E['VARIANT_NAME']} speed check, about 3 to 5 minutes. Close games and video apps first.", flush=True)
 card = None if NV else card_dir()
 before = used(card)
 png = os.path.join(D, 'vision_check.png')
@@ -563,7 +632,7 @@ cpu = first_line('/proc/cpuinfo', 'model name', ':') or platform.processor() or 
 ram = first_line('/proc/meminfo', 'MemTotal:', ':')
 ram = round(int(ram.split()[0]) / 1048576) if ram else 'n/a'
 lines = [
-    f"Bonsai 2 27B, Linux speed check ({stamp}, {E['RELEASE']})",
+    f"{E['VARIANT_NAME']}, Linux speed check ({stamp}, {E['RELEASE']})",
     f"card: {E['CARD_NAME']}, {E['CARD_MIB']} MiB, compute {E.get('CC')}, NVIDIA driver {E.get('DRIVER')}" if NV else
     f"card: {E['CARD_NAME']}, {E['CARD_MIB']} MiB{' of its own (an APU, the rest is shared GTT)' if APU else ''}, {mesa()} (RADV)",
     f"system: {first_line('/etc/os-release', 'PRETTY_NAME=', '=') or 'Linux'}, kernel {platform.release()}, {cpu}, {ram} GB RAM",
@@ -596,9 +665,9 @@ size = 'apu' if APU else f"{round(int(E['CARD_MIB']) / 1024)}gb"
 # the README's names: 16k / 32k / 48k / 64k for those windows, thousands for the rest (131k, 195k, 262k)
 window = 'n/a' if not on['ctx'] else (f"{on['ctx'] // 1024}k" if on['ctx'] % 16384 == 0 and on['ctx'] < 131072
                                        else f"{round(on['ctx'] / 1000)}k")
-short = (f"bonsai 2 27b on my {E['CARD_NAME'].lower()} {size} (linux, {'cuda' if NV else 'vulkan'}): {f1(mon)} tok/s with "
+short = (f"{E['VARIANT_NAME'].lower()} on my {E['CARD_NAME'].lower()} {size} (linux, {'cuda' if NV else 'vulkan'}): {f1(mon)} tok/s with "
          f"the mtp head, {f1(moff)} without, {window} context @sudoingX")
-out = os.path.join(D, time.strftime('bonsai2-results-%Y%m%d-%H%M.txt'))
+out = os.path.join(D, time.strftime(E['VARIANT_SLUG'] + '-results-%Y%m%d-%H%M.txt'))
 with open(out, 'w') as f:
     f.write(text + '\n\nshort line for X:\n' + short + '\n')
 copied = False

@@ -5,6 +5,12 @@
 # shortcut, then starts the model and opens the chat page in your browser.
 # AMD Radeon (beta): with no NVIDIA card it looks for a Radeon and takes PrismML's Vulkan build instead.
 # Optional, set before the line: $env:BONSAI_DIR (default %USERPROFILE%\bonsai2), $env:BONSAI_PORT (default 8899).
+#
+# Two builds, one script. The default is Bonsai 2 27B, the standard build. $env:BONSAI_MODEL = 'offrail'
+# installs Offrail 27B instead: the uncensored build, the same stack with OS-Software's Heretic weights
+# (answers what the base refuses). With a console it asks once; with no console (a script, a scheduled
+# job) it takes the default and never blocks. $env:BONSAI_NO_PROMPT = 1 skips the question.
+#   $env:BONSAI_MODEL = 'offrail'; irm .../install.ps1 | iex
 
 function Install-Bonsai2 {
     $ErrorActionPreference = 'Stop'
@@ -14,7 +20,8 @@ function Install-Bonsai2 {
 
     $release = 'v1.2-windows'
     $ref     = if ($env:BONSAI_REF) { $env:BONSAI_REF } else { 'main' }
-    $hf      = 'https://huggingface.co/sudoingx/Ternary-Bonsai-2-27B-PTQ1_0-MTP-GGUF/resolve/main'
+    # BONSAI_HF / BONSAI_OFFRAIL_HF override the two repos (tests, or a build that is not uploaded yet)
+    $hf      = if ($env:BONSAI_HF) { $env:BONSAI_HF } else { 'https://huggingface.co/sudoingx/Ternary-Bonsai-2-27B-PTQ1_0-MTP-GGUF/resolve/main' }
     $prism   = 'https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf/resolve/main'
     $hub     = "https://raw.githubusercontent.com/sudoingX/local-ai-on-your-gaming-gpu/$ref"
     $dir     = if ($env:BONSAI_DIR) { $env:BONSAI_DIR } else { Join-Path $env:USERPROFILE 'bonsai2' }
@@ -34,8 +41,36 @@ function Install-Bonsai2 {
     $mmproj    = 'Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf'
     $mmprojSha = '6807ede61d570bb86ba34b756a0fa109edc33668604de867c6ea6d8f1d631903'
 
+    # ---- which build: base (the default) or offrail ----
+    # BONSAI_MODEL = offrail (or base) skips the question. No console and no answer = base, so a scripted
+    # run never blocks. The weights come from the Offrail repo when the build is offrail, the bundles
+    # and the base weights stay in the base repo; the chat model name changes with it.
+    $variant = if ($env:BONSAI_MODEL) { "$($env:BONSAI_MODEL)".Trim().ToLower() } else { '' }
+    if (-not $variant -and -not $test -and -not $env:BONSAI_NO_PROMPT) {
+        try {
+            Write-Host ''
+            Write-Host 'Which model?'
+            Write-Host '  1) Bonsai 2 27B   the standard build (default)'
+            Write-Host '  2) Offrail 27B    the uncensored build, answers what the base refuses'
+            $answer = Read-Host 'Choice [1]'
+            if ("$answer".Trim().ToLower() -in @('2', 'offrail', 'uncensored', 'o')) { $variant = 'offrail' }
+        } catch { $variant = '' }
+        Write-Host ''
+    }
+    if ($variant -in @('offrail', 'uncensored')) { $variant = 'offrail' } else { $variant = 'base' }
+    $modelHf  = $hf
+    $vname    = 'Bonsai 2 27B'
+    $apiAlias = 'bonsai-2-27b'
+    $slug     = 'bonsai2'
+    if ($variant -eq 'offrail') {
+        $modelHf  = if ($env:BONSAI_OFFRAIL_HF) { $env:BONSAI_OFFRAIL_HF } else { 'https://huggingface.co/sudoingx/Offrail-27B-Uncensored/resolve/main' }
+        $vname    = 'Offrail 27B'
+        $apiAlias = 'offrail-27b'
+        $slug     = 'offrail'
+    }
+
     Write-Host ''
-    Write-Host 'Bonsai 2 27B for small GPUs, Windows installer' -ForegroundColor Cyan
+    Write-Host ('{0} for small GPUs, Windows installer' -f $vname) -ForegroundColor Cyan
     Write-Host 'github.com/sudoingX/local-ai-on-your-gaming-gpu'
     Write-Host ''
 
@@ -133,16 +168,19 @@ function Install-Bonsai2 {
         if ($drv -lt $b.driver) { Write-Host ('Driver {0} is too old for the {1} build. Update to {2} or newer from nvidia.com, then run this again.' -f $g.Driver, $b.cards, $b.driver.ToString($inv)) -ForegroundColor Red; return }
     }
 
-    # 3. the model file for this much VRAM (a Radeon APU counts as 16 GB)
-    if ($g.MiB -ge 15000 -or $g.Apu) { $tier = '16gb'; $model = 'Ternary-Bonsai-2-27B-PTQ1_0-mtp.gguf';      $vision = $true;  $nmax = 1 }
-    elseif ($g.MiB -ge 11500) { $tier = '12gb'; $model = 'Ternary-Bonsai-2-27B-PTQ1_0-mtp.gguf';      $vision = $false; $nmax = 1 }
-    elseif ($g.MiB -ge 7500)  { $tier = '8gb';  $model = 'Ternary-Bonsai-2-27B-PTQ1_0-mtp-lean.gguf'; $vision = $false; $nmax = 2 }
+    # 3. the model file for this much VRAM (a Radeon APU counts as 16 GB). Offrail's two files are the
+    # base's sizes (7,012,820,544 and 6,297,658,848), so the same tiers and the same 8 GB window steps apply.
+    $mtpFile  = if ($variant -eq 'offrail') { 'Offrail-27B-12G.gguf' } else { 'Ternary-Bonsai-2-27B-PTQ1_0-mtp.gguf' }
+    $leanFile = if ($variant -eq 'offrail') { 'Offrail-27B-8G.gguf' }  else { 'Ternary-Bonsai-2-27B-PTQ1_0-mtp-lean.gguf' }
+    if ($g.MiB -ge 15000 -or $g.Apu) { $tier = '16gb'; $model = $mtpFile;  $vision = $true;  $nmax = 1 }
+    elseif ($g.MiB -ge 11500) { $tier = '12gb'; $model = $mtpFile;  $vision = $false; $nmax = 1 }
+    elseif ($g.MiB -ge 7500)  { $tier = '8gb';  $model = $leanFile; $vision = $false; $nmax = 2 }
     elseif ($amd -and $g.MiB -lt 2048) {
-        Write-Host ('This Radeon has {0} MiB of its own memory and {1} MiB shared. Bonsai 2 27B needs a card with 8 GB or more,' -f $g.MiB, $g.SharedMiB) -ForegroundColor Red
+        Write-Host ('This Radeon has {0} MiB of its own memory and {1} MiB shared. {2} needs a card with 8 GB or more,' -f $g.MiB, $g.SharedMiB, $vname) -ForegroundColor Red
         Write-Host 'or an APU with more than 16 GB shared (32 GB of RAM or more).' -ForegroundColor Red
         return
     }
-    else { Write-Host ('Bonsai 2 27B needs a card with 8 GB or more, this one has {0} MiB.' -f $g.MiB) -ForegroundColor Red; return }
+    else { Write-Host ('{0} needs a card with 8 GB or more, this one has {1} MiB.' -f $vname, $g.MiB) -ForegroundColor Red; return }
     # on Vulkan the head drafts 2 tokens on every tier (n-max 2 decoded 15 to 16% faster than n-max 1 on the Radeon 8060S)
     if ($amd) { $nmax = 2 }
     # RTX 20: the head drafts 1 token on every tier (on an RTX 2070 Super n-max 1 decoded within 5% of n-max 2 with a 150 MiB
@@ -171,7 +209,9 @@ function Install-Bonsai2 {
         $leaf = Split-Path $path -Leaf
         if ((Test-Path $path) -and ((Get-FileHash $path -Algorithm SHA256).Hash.ToLower() -eq $sha)) { Write-Host "  ok    $leaf (already here)"; return }
         Write-Host "  get   $leaf"
-        $r = Invoke-Curl @('-L', '--fail', '--retry', '5', '--retry-delay', '3', '-C', '-', '-o', "$path.part", $url)
+        # curl cannot resume a file:// url (the tests use those), so leave -C - out for them
+        $resume = if ($url -like 'file://*') { @() } else { @('-C', '-') }
+        $r = Invoke-Curl (@('-L', '--fail', '--retry', '5', '--retry-delay', '3') + $resume + @('-o', "$path.part", $url))
         if ($r.rc -ne 0) { throw "download failed (curl $($r.rc)): $url, run the installer again to resume" }
         $h = (Get-FileHash "$path.part" -Algorithm SHA256).Hash.ToLower()
         if ($h -ne $sha) { Remove-Item "$path.part" -Force; throw "checksum mismatch for $leaf, the download was removed, run the installer again" }
@@ -191,6 +231,12 @@ function Install-Bonsai2 {
         $r = Invoke-Curl @('-sL', '--fail', "$hf/SHA256SUMS")
         if ($r.rc -ne 0) { throw 'could not read SHA256SUMS from Hugging Face' }
         foreach ($line in @($r.out)) { $p = "$line".Trim() -split '\s+', 2; if ($p.Count -eq 2) { $sums[$p[1].TrimStart('*')] = $p[0].ToLower() } }
+        if ($variant -eq 'offrail') {
+            # the weights live in the Offrail repo with their own manifest; the bundles stay in the base repo
+            $r2 = Invoke-Curl @('-sL', '--fail', "$modelHf/SHA256SUMS")
+            if ($r2.rc -ne 0) { throw 'could not read SHA256SUMS from the Offrail repo' }
+            foreach ($line in @($r2.out)) { $p = "$line".Trim() -split '\s+', 2; if ($p.Count -eq 2) { $sums[$p[1].TrimStart('*')] = $p[0].ToLower() } }
+        }
         $needs = if ($amd) { @($model) } else { @("$($b.zip).zip", $model) }
         foreach ($need in $needs) { if (-not $sums.ContainsKey($need)) { throw "SHA256SUMS on Hugging Face has no line for $need" } }
 
@@ -226,7 +272,7 @@ function Install-Bonsai2 {
             }
         }
         if (-not $skipModel) {
-            Get-Verified "$hf/$model" (Join-Path $dir "models\$model") $sums[$model]
+            Get-Verified "$modelHf/$model" (Join-Path $dir "models\$model") $sums[$model]
             if ($vision) { Get-Verified "$prism/$mmproj" (Join-Path $dir "models\$mmproj") $mmprojSha }
         }
     }
@@ -237,6 +283,10 @@ function Install-Bonsai2 {
     if ($amd) {
         $cfg = [ordered]@{
             release   = $release
+            variant   = $variant
+            name      = $vname
+            alias     = $apiAlias
+            slug      = $slug
             backend   = 'vulkan'
             build     = $b.zip
             tier      = $tier
@@ -253,6 +303,10 @@ function Install-Bonsai2 {
     } else {
         $cfg = [ordered]@{
             release  = $release
+            variant  = $variant
+            name     = $vname
+            alias    = $apiAlias
+            slug     = $slug
             build    = $b.zip
             tier     = $tier
             model    = $model
@@ -267,27 +321,27 @@ function Install-Bonsai2 {
         }
     }
     Set-Content -Path (Join-Path $dir 'bonsai2.json') -Value ($cfg | ConvertTo-Json) -Encoding ASCII
-    $start = "@echo off`r`ntitle Bonsai 2 27B`r`npowershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0bonsai2.ps1`" start`r`npause`r`n"
-    $bench = "@echo off`r`ntitle Bonsai 2 27B speed check`r`npowershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0bonsai2.ps1`" bench`r`npause`r`n"
+    $start = "@echo off`r`ntitle $vname`r`npowershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0bonsai2.ps1`" start`r`npause`r`n"
+    $bench = "@echo off`r`ntitle $vname speed check`r`npowershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0bonsai2.ps1`" bench`r`npause`r`n"
     Set-Content -Path (Join-Path $dir 'start-bonsai.bat') -Value $start -Encoding ASCII -NoNewline
     Set-Content -Path (Join-Path $dir 'bench-bonsai.bat') -Value $bench -Encoding ASCII -NoNewline
     try {
         $ws = New-Object -ComObject WScript.Shell
-        $lnk = $ws.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'Bonsai 2 27B.lnk'))
+        $lnk = $ws.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) "$vname.lnk"))
         $lnk.TargetPath = Join-Path $dir 'start-bonsai.bat'
         $lnk.WorkingDirectory = $dir
         $lnk.Save()
-        Write-Host 'Desktop shortcut: Bonsai 2 27B'
+        Write-Host ('Desktop shortcut: {0}' -f $vname)
     } catch {
         Write-Host 'No desktop shortcut this time, start it with start-bonsai.bat in the folder below.'
     }
 
     Write-Host ''
     Write-Host 'Installed.' -ForegroundColor Green
-    Write-Host ('Start it:         double-click "Bonsai 2 27B" on your desktop, or {0}' -f (Join-Path $dir 'start-bonsai.bat'))
+    Write-Host ('Start it:         double-click "{0}" on your desktop, or {1}' -f $vname, (Join-Path $dir 'start-bonsai.bat'))
     Write-Host ('Check your speed: {0}, it saves your results and copies them to the clipboard' -f (Join-Path $dir 'bench-bonsai.bat'))
     Write-Host ('Chat page:        http://127.0.0.1:{0}' -f $port)
-    Write-Host ('API for agents:   http://127.0.0.1:{0}/v1 (OpenAI compatible, model bonsai-2-27b, any API key)' -f $port)
+    Write-Host ('API for agents:   http://127.0.0.1:{0}/v1 (OpenAI compatible, model {1}, any API key)' -f $port, $apiAlias)
     if ($amd) { Write-Host 'Radeon support is in beta: run the speed check once and share the result, it sets the numbers for every Radeon owner.' }
     if (-not $test -and -not $env:BONSAI_NO_START) {
         Write-Host ''

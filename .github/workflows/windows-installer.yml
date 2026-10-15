@@ -44,6 +44,42 @@ jobs:
             gpu: '0, NVIDIA GeForce GTX 1660 SUPER, 6144, 595.95, 7.5'
             tier: 'none'
             build: 'none'
+          # the uncensored build (BONSAI_MODEL=offrail): the same tiers, the weights from its own repo, its own model name
+          - card: 'RTX 3060 12GB (offrail)'
+            gpu: '0, NVIDIA GeForce RTX 3060, 12288, 595.95, 8.6'
+            tier: '12gb'
+            build: 'cuda12.4-sm86-sm89'
+            variant: 'offrail'
+            alias: 'offrail-27b'
+          - card: 'RTX 5060 Ti 16GB (offrail)'
+            gpu: '0, NVIDIA GeForce RTX 5060 Ti, 16311, 595.95, 12.0'
+            tier: '16gb'
+            build: 'cuda13.3-sm120'
+            variant: 'offrail'
+            alias: 'offrail-27b'
+          - card: 'RTX 3000 Ada Laptop 8GB (offrail)'
+            gpu: '0, NVIDIA RTX 3000 Ada Generation Laptop GPU, 8188, 595.95, 8.9'
+            tier: '8gb'
+            build: 'cuda12.4-sm86-sm89'
+            ctx8: '49152'
+            variant: 'offrail'
+            alias: 'offrail-27b'
+          - card: 'Radeon RX 7600 8GB, desktop on it (offrail)'
+            amd: 'AMD Radeon RX 7600, 8192, 16304, 25.9.1'
+            vk: '  Vulkan0: AMD Radeon RX 7600 (8176 MiB, 7476 MiB free)'
+            tier: '8gb'
+            build: 'win-vulkan'
+            dev: 'Vulkan0'
+            ctx8: '49152'
+            dq: 'yes'
+            variant: 'offrail'
+            alias: 'offrail-27b'
+          - card: 'GTX 1660 Super 6GB (refused, offrail)'
+            gpu: '0, NVIDIA GeForce GTX 1660 SUPER, 6144, 595.95, 7.5'
+            tier: 'none'
+            build: 'none'
+            variant: 'offrail'
+            alias: 'offrail-27b'
           - card: 'RTX 5070 on an old driver (refused)'
             gpu: '0, NVIDIA GeForce RTX 5070, 12227, 572.16, 12.0'
             tier: 'none'
@@ -115,6 +151,7 @@ jobs:
           BONSAI_FAKE_VK: ${{ matrix.vk }}
           BONSAI_FAKE_FREE: '7900'
           BONSAI_TEST: '1'
+          BONSAI_MODEL: ${{ matrix.variant }}
           BONSAI_HUB_DIR: ${{ github.workspace }}
           BONSAI_DIR: ${{ runner.temp }}\bonsai2
         run: |
@@ -136,11 +173,19 @@ jobs:
           $out = powershell -NoProfile -ExecutionPolicy Bypass -File "$d\bonsai2.ps1" print | Out-String
           Write-Host $out
           if ($out -notmatch 'draft-mtp') { throw 'print mode shows no draft-mtp line' }
-          if ($out -notmatch '--alias bonsai-2-27b') { throw 'agents need the bonsai-2-27b model name' }
+          $wantAlias = if ('${{ matrix.alias }}') { '${{ matrix.alias }}' } else { 'bonsai-2-27b' }
+          if ($out -notmatch "--alias $wantAlias") { throw "agents need the $wantAlias model name" }
           if ($out -notmatch '--host 127.0.0.1') { throw 'it should serve on 127.0.0.1 by default' }
           if ('${{ matrix.tier }}' -eq '8gb' -and $out -notmatch '-c ${{ matrix.ctx8 }} ') { throw '8gb tier should pick -c ${{ matrix.ctx8 }} here' }
           if ('${{ matrix.tier }}' -ne '8gb' -and $out -notmatch '--fit on') { throw 'this tier should use --fit on' }
           if ('${{ matrix.tier }}' -eq '16gb' -and $out -notmatch 'mmproj') { throw '16gb tier should load the vision file' }
+          if ('${{ matrix.variant }}' -eq 'offrail') {
+            if ($cfg.variant -ne 'offrail') { throw "bonsai2.json should say offrail, it says $($cfg.variant)" }
+            if ($cfg.name -ne 'Offrail 27B') { throw "the build should be called Offrail 27B, it is $($cfg.name)" }
+            if ($cfg.alias -ne '${{ matrix.alias }}') { throw "the chat model should be ${{ matrix.alias }}, it is $($cfg.alias)" }
+            if ($cfg.model -notlike 'Offrail-27B-*') { throw "the model file should be an Offrail one, it is $($cfg.model)" }
+            if ($out -notmatch 'Offrail-27B-') { throw 'the launcher should load an Offrail weight' }
+          }
           if ('${{ matrix.amd }}' -ne '') {
             if ($cfg.backend -ne 'vulkan') { throw 'a Radeon should get the Vulkan backend' }
             if ($out -notmatch '--device ${{ matrix.dev }} ') { throw 'it should run on ${{ matrix.dev }} only' }
@@ -153,6 +198,51 @@ jobs:
             if (@('8gb', '12gb') -notcontains '${{ matrix.tier }}' -and $out -match '-ub 256') { throw 'only 8 and 12 GB Radeons run ubatch 256' }
           }
 
+      # The uncensored build fetches its weights from a SECOND Hugging Face repo, with its own SHA256SUMS.
+      # BONSAI_TEST skips the downloads, so that plumbing needs its own step: two fake repos over file://, tiny
+      # files, and the real download, verify and unpack code runs. One row only.
+      - name: The second repo, with fake repos (the Offrail manifest and the model switch)
+        if: matrix.card == 'RTX 3060 12GB (offrail)'
+        shell: powershell
+        env:
+          BONSAI_FAKE_GPU: '0, NVIDIA GeForce RTX 3060, 12288, 595.95, 8.6'
+          BONSAI_NO_PROMPT: '1'
+          BONSAI_NO_START: '1'
+          BONSAI_HUB_DIR: ${{ github.workspace }}
+        run: |
+          $S = Join-Path $env:RUNNER_TEMP 'fakerepos'
+          Remove-Item $S -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path "$S\base", "$S\offrail", "$S\run" | Out-Null
+          $zip = 'bonsai2-small-gpu-windows-x64-cuda12.4-sm86-sm89-ff41412'
+          New-Item -ItemType Directory -Force -Path "$S\pack\$zip\bin" | Out-Null
+          Set-Content "$S\pack\$zip\bin\llama-server.exe" 'stub' -Encoding ASCII
+          Compress-Archive -Path "$S\pack\$zip" -DestinationPath "$S\base\$zip.zip" -Force
+          Set-Content "$S\base\Ternary-Bonsai-2-27B-PTQ1_0-mtp.gguf" 'FAKE-BASE-MTP' -Encoding ASCII
+          Set-Content "$S\offrail\Offrail-27B-12G.gguf" 'FAKE-OFFRAIL-12G' -Encoding ASCII
+          function New-Manifest($d) {
+            $lines = foreach ($f in (Get-ChildItem $d -File | Where-Object { $_.Name -ne 'SHA256SUMS' })) {
+              '{0}  {1}' -f (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower(), $f.Name
+            }
+            Set-Content "$d\SHA256SUMS" ($lines -join "`n") -Encoding ASCII
+          }
+          New-Manifest "$S\base"; New-Manifest "$S\offrail"
+          $env:BONSAI_HF = 'file:///' + ("$S\base" -replace '\\', '/')
+          $env:BONSAI_OFFRAIL_HF = 'file:///' + ("$S\offrail" -replace '\\', '/')
+          $env:BONSAI_DIR = "$S\run"
+          $env:BONSAI_MODEL = 'offrail'
+          Get-Content .\install.ps1 -Raw | Invoke-Expression
+          $cfg = Get-Content "$S\run\bonsai2.json" -Raw | ConvertFrom-Json
+          if ($cfg.variant -ne 'offrail') { throw "variant $($cfg.variant), expected offrail" }
+          if ($cfg.alias -ne 'offrail-27b') { throw "alias $($cfg.alias), expected offrail-27b" }
+          if ($cfg.model -ne 'Offrail-27B-12G.gguf') { throw "model $($cfg.model), expected Offrail-27B-12G.gguf" }
+          if (-not (Test-Path "$S\run\models\Offrail-27B-12G.gguf")) { throw 'the Offrail weight was not fetched' }
+          if (Test-Path "$S\run\models\Ternary-Bonsai-2-27B-PTQ1_0-mtp.gguf") { throw 'it fetched the base weight instead' }
+          if (-not (Test-Path "$S\run\$zip\bin\llama-server.exe")) { throw 'the bundle from the base repo was not unpacked' }
+          $out = powershell -NoProfile -ExecutionPolicy Bypass -File "$S\run\bonsai2.ps1" print | Out-String
+          if ($out -notmatch '--alias offrail-27b') { throw 'the launcher does not answer to offrail-27b' }
+          if ($out -notmatch 'Offrail-27B-12G\.gguf') { throw 'the launcher does not load the Offrail weight' }
+          Write-Host 'both manifests read, the weight came from the second repo, the launcher follows'
+
   linux:
     runs-on: ubuntu-24.04
     strategy:
@@ -164,6 +254,13 @@ jobs:
           - { card: 'RTX 3000 Ada Laptop 8GB', gpu: '0, NVIDIA RTX 3000 Ada Generation Laptop GPU, 8188, 595.95, 8.9', tier: '8gb', bundle: 'cuda12.4-sm86-sm89', nmax: '2', ctx8: '49152' }
           - { card: 'RTX 2070 Super 8GB (Turing)', gpu: '0, NVIDIA GeForce RTX 2070 SUPER, 8192, 595.84, 7.5', tier: '8gb', bundle: 'cuda12.4-sm75', nmax: '1', ctx8: '49152' }
           - { card: 'GTX 1660 Super 6GB (refused)', gpu: '0, NVIDIA GeForce GTX 1660 SUPER, 6144, 595.95, 7.5', tier: 'none', bundle: 'none' }
+          # the uncensored build (--model offrail): the same tiers, the weights from its own repo, its own model name
+          - { card: 'RTX 3060 12GB (offrail)', gpu: '0, NVIDIA GeForce RTX 3060, 12288, 595.95, 8.6', tier: '12gb', bundle: 'cuda12.4-sm86-sm89', nmax: '1', variant: 'offrail', alias: 'offrail-27b' }
+          - { card: 'RTX 5060 Ti 16GB (offrail)', gpu: '0, NVIDIA GeForce RTX 5060 Ti, 16311, 595.95, 12.0', tier: '16gb', bundle: 'cuda12.8-sm120', nmax: '1', variant: 'offrail', alias: 'offrail-27b' }
+          - { card: 'RTX 3000 Ada Laptop 8GB (offrail)', gpu: '0, NVIDIA RTX 3000 Ada Generation Laptop GPU, 8188, 595.95, 8.9', tier: '8gb', bundle: 'cuda12.4-sm86-sm89', nmax: '2', ctx8: '49152', lean: 'Offrail-27B-8G', variant: 'offrail', alias: 'offrail-27b' }
+          - { card: 'Radeon RX 7600 8GB (offrail)', drm: 'card1 0x1002 8176 15000 AMD Radeon RX 7600',
+              vk: '  Vulkan0: AMD Radeon RX 7600 (RADV NAVI33) (8176 MiB, 7476 MiB free)', tier: '8gb', dev: 'Vulkan0', ctx8: '49152', dq: 'yes', variant: 'offrail', alias: 'offrail-27b' }
+          - { card: 'GTX 1660 Super 6GB (refused, offrail)', gpu: '0, NVIDIA GeForce GTX 1660 SUPER, 6144, 595.95, 7.5', tier: 'none', bundle: 'none', variant: 'offrail', alias: 'offrail-27b' }
           # Radeons: drm = 'cardN vendor VRAM-MiB GTT-MiB name' per card, vk = what the Vulkan build lists at start
           - { card: 'Radeon RX 7600 8GB, desktop on it', drm: 'card1 0x1002 8176 15000 AMD Radeon RX 7600',
               vk: '  Vulkan0: AMD Radeon RX 7600 (RADV NAVI33) (8176 MiB, 7476 MiB free)', tier: '8gb', dev: 'Vulkan0', ctx8: '49152', dq: 'yes' }
@@ -211,11 +308,14 @@ jobs:
           bash -n "$BONSAI_DIR/start-bonsai.sh"
           cat "$BONSAI_DIR/start-bonsai.sh"
           grep -q 'draft-mtp' "$BONSAI_DIR/start-bonsai.sh"
-          grep -q -- '--alias bonsai-2-27b' "$BONSAI_DIR/start-bonsai.sh"
+          WANT_ALIAS='${{ matrix.alias }}'; [ -n "$WANT_ALIAS" ] || WANT_ALIAS='bonsai-2-27b'
+          grep -q -- "--alias $WANT_ALIAS" "$BONSAI_DIR/start-bonsai.sh"
+          LEAN='${{ matrix.lean }}'; [ -n "$LEAN" ] || LEAN='mtp-lean'
+          SLUG='bonsai2'; [ -z '${{ matrix.variant }}' ] || SLUG='offrail'
           if [ -z '${{ matrix.drm }}' ]; then
             grep -q '${{ matrix.bundle }}' "$BONSAI_DIR/start-bonsai.sh"
             case '${{ matrix.tier }}' in
-              8gb)  grep -q 'C=49152' "$BONSAI_DIR/start-bonsai.sh" && grep -q 'mtp-lean' "$BONSAI_DIR/start-bonsai.sh" ;;
+              8gb)  grep -q 'C=49152' "$BONSAI_DIR/start-bonsai.sh" && grep -q "$LEAN" "$BONSAI_DIR/start-bonsai.sh" ;;
               16gb) grep -q -- '--mmproj' "$BONSAI_DIR/start-bonsai.sh" && grep -q -- '--fit on' "$BONSAI_DIR/start-bonsai.sh" ;;
               12gb) grep -q -- '--fit on' "$BONSAI_DIR/start-bonsai.sh" && ! grep -q -- '--mmproj' "$BONSAI_DIR/start-bonsai.sh" ;;
             esac
@@ -248,7 +348,8 @@ jobs:
             grep -q 'same greedy text with and without the head: yes' <<< "$out"
             grep -q 'vram with the head: 512 MiB loaded' <<< "$out"
             grep -q '(linux, cuda): 45.6 tok/s with the mtp head, 26.2 without' <<< "$out"
-            ls "$BONSAI_DIR"/bonsai2-results-*.txt
+            [ -z '${{ matrix.variant }}' ] || grep -q 'offrail 27b on my' <<< "$out"
+            ls "$BONSAI_DIR"/$SLUG-results-*.txt
           else
             # Radeon: the start script against a stand-in llama-server that lists the Vulkan devices and prints its arguments
             grep -q 'TIER=${{ matrix.tier }} ' "$BONSAI_DIR/start-bonsai.sh"
@@ -262,7 +363,7 @@ jobs:
             grep -q -- '--device ${{ matrix.dev }} ' <<< "$args"
             grep -q -- '--spec-draft-n-max 2' <<< "$args"
             case '${{ matrix.tier }}' in
-              8gb)  grep -q -- '-c ${{ matrix.ctx8 }} --fit off -ub 256' <<< "$args" && grep -q 'mtp-lean' <<< "$args" ;;
+              8gb)  grep -q -- '-c ${{ matrix.ctx8 }} --fit off -ub 256' <<< "$args" && grep -q "$LEAN" <<< "$args" ;;
               16gb) grep -q -- '--mmproj' <<< "$args" && grep -q -- '--fit on' <<< "$args" && ! grep -q -- '-ub 256' <<< "$args" ;;
               12gb) grep -q -- '--fit on --fit-target 1024 --fit-ctx 16384 -ub 256' <<< "$args" && ! grep -q -- '--mmproj' <<< "$args" ;;
             esac
@@ -287,7 +388,8 @@ jobs:
             grep -q 'head gain: +74%' <<< "$out"
             grep -q 'same greedy text with and without the head: NO' <<< "$out"
             grep -q '(linux, vulkan): 45.6 tok/s with the mtp head, 26.2 without' <<< "$out"
-            ls "$BONSAI_DIR"/bonsai2-results-*.txt
+            [ -z '${{ matrix.variant }}' ] || grep -q 'offrail 27b on my' <<< "$out"
+            ls "$BONSAI_DIR"/$SLUG-results-*.txt
           fi
 
   # The real files: download, SHA256 check and unpack exactly as a user gets them, minus the 7 GB model. NVIDIA builds come
