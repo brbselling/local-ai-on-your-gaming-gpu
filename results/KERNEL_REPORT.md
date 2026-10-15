@@ -227,7 +227,7 @@ off), `/health` ok. Fork source and build in `/root/llama.cpp-sudo` (branch `ptq
 build dir with the patched `llama-server`, `llama-bench`, `test-backend-ops`); PR series `pr-hadamard-mtp`
 and `pr-ptq1-mmv` on `prism/prism` in the same repo, built in the worktrees `/root/llama.cpp-pr-hadamard`
 and `/root/llama.cpp-pr-mmv`. Scripts, logs and results in `/root/mtp-graft/`. Original Bonsai 2 file,
-`~/bin` and `~/.hermes` untouched. Nothing pushed.
+`~/bin` untouched. Nothing pushed.
 
 ## Addendum (Sep 19 evening): PR series, depth ladder, third tensor-core attempt
 

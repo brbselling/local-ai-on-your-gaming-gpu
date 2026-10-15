@@ -10,6 +10,11 @@ $ProgressPreference = 'SilentlyContinue'
 $inv  = [Globalization.CultureInfo]::InvariantCulture
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $cfg  = Get-Content (Join-Path $here 'bonsai2.json') -Raw | ConvertFrom-Json
+# the build's own names: an Offrail install says Offrail 27B and answers to offrail-27b. A bonsai2.json
+# written by an older installer has neither field, so both fall back to the standard build.
+$vname = if ($cfg.name)  { "$($cfg.name)" }  else { 'Bonsai 2 27B' }
+$alias = if ($cfg.alias) { "$($cfg.alias)" } else { 'bonsai-2-27b' }
+$slug  = if ($cfg.slug)  { "$($cfg.slug)" }  else { 'bonsai2' }
 $exe  = Join-Path $here "$($cfg.build)\bin\llama-server.exe"
 $smi  = "$env:SystemRoot\System32\nvidia-smi.exe"
 if (-not (Test-Path $smi)) { $c = Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue; if ($c) { $smi = $c.Source } }
@@ -107,7 +112,7 @@ function Get-Context8gb {
 function Get-ServerArgs([int]$port, [bool]$head, [bool]$chat) {
     $bindHost = if ($chat -and $env:BONSAI_HOST) { $env:BONSAI_HOST } else { '127.0.0.1' }
     $a = @('-m', (Join-Path $here "models\$($cfg.model)"), '-ngl', '99', '-fa', 'on', '-np', '1', '-ctk', 'q4_0', '-ctv', 'q4_0', '--jinja',
-           '--alias', 'bonsai-2-27b', '--host', $bindHost, '--port', "$port")
+           '--alias', $alias, '--host', $bindHost, '--port', "$port")
     if ($chat -and $env:BONSAI_API_KEY) { $a += @('--api-key', $env:BONSAI_API_KEY) }
     if ($cfg.mmproj) { $a += @('--mmproj', (Join-Path $here "models\$($cfg.mmproj)")) }
     if ($vulkan) { $a += @('--device', (Get-Vk).Name) }
@@ -145,9 +150,9 @@ if ($Mode -eq 'start') {
         return
     }
     if ($vulkan) { $d = Get-Vk; Write-Host ('Radeon:          {0}, {1}, {2} MiB free (AMD Radeon beta, Vulkan)' -f $d.Name, $d.Desc, $d.Free) }
-    Write-Host 'Bonsai 2 27B is loading, the chat page opens in your browser when it is ready.' -ForegroundColor Cyan
+    Write-Host ('{0} is loading, the chat page opens in your browser when it is ready.' -f $vname) -ForegroundColor Cyan
     Write-Host "Chat page:       http://127.0.0.1:$port"
-    Write-Host "API for agents:  http://127.0.0.1:$port/v1  (OpenAI compatible, model bonsai-2-27b, any API key unless you set BONSAI_API_KEY)"
+    Write-Host "API for agents:  http://127.0.0.1:$port/v1  (OpenAI compatible, model $alias, any API key unless you set BONSAI_API_KEY)"
     Write-Host 'Close this window to stop it.'
     Write-Host ''
     $poll = "for(`$i=0;`$i -lt 900;`$i++){try{`$null=Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 http://127.0.0.1:$port/health;Start-Process http://127.0.0.1:$port;break}catch{Start-Sleep 1}}"
@@ -169,7 +174,7 @@ if (Get-Process llama-server -ErrorAction SilentlyContinue) {
 $bport = 8091
 $base = "http://127.0.0.1:$bport"
 $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm'
-Write-Host 'Bonsai 2 27B speed check, about 3 to 5 minutes. Close games and video apps first.' -ForegroundColor Cyan
+Write-Host ('{0} speed check, about 3 to 5 minutes. Close games and video apps first.' -f $vname) -ForegroundColor Cyan
 
 function Start-Server([bool]$head) {
     $tag = if ($head) { 'head' } else { 'nohead' }
@@ -252,7 +257,7 @@ $cpu = "$((Get-CimInstance Win32_Processor | Select-Object -First 1).Name)".Trim
 $ram = [math]::Round($os.TotalVisibleMemorySize / 1MB)
 $visionNote = if ($cfg.mmproj) { ' + vision' } else { '' }
 $lines = @(
-    "Bonsai 2 27B, Windows speed check ($stamp, $($cfg.release))",
+    "$vname, Windows speed check ($stamp, $($cfg.release))",
     "card: $($cfg.gpuName), $($cfg.gpuMiB) MiB, driver $($cfg.driver)",
     "system: $("$($os.Caption)".Trim()) $($os.Version), $cpu, $ram GB RAM",
     "build: $($cfg.build), tier $($cfg.tier), file $($cfg.model)$visionNote",
@@ -287,11 +292,11 @@ if ($vulkan) {
         $c = [int]$on.ctx
         $window = if ($c % 16384 -eq 0 -and $c -lt 131072) { '{0}k' -f ($c / 1024) } else { '{0}k' -f [math]::Round($c / 1000) }
     }
-    $short = 'bonsai 2 27b on my {0} {1} (windows, vulkan): {2} tok/s with the mtp head, {3} without, {4} context @sudoingX' -f `
-        "$($cfg.gpuName)".ToLower(), $size, (Format-TokS $mOn), (Format-TokS $mOff), $window
+    $short = '{0} on my {1} {2} (windows, vulkan): {3} tok/s with the mtp head, {4} without, {5} context @sudoingX' -f `
+        $vname.ToLower(), "$($cfg.gpuName)".ToLower(), $size, (Format-TokS $mOn), (Format-TokS $mOff), $window
     $text += "`r`n`r`nshort line for X:`r`n$short"
 }
-$file = Join-Path $here ('bonsai2-results-{0}.txt' -f (Get-Date -Format 'yyyyMMdd-HHmm'))
+$file = Join-Path $here ('{0}-results-{1}.txt' -f $slug, (Get-Date -Format 'yyyyMMdd-HHmm'))
 Set-Content -Path $file -Value $text -Encoding ASCII
 try { Set-Clipboard -Value $(if ($short) { $short } else { $text }) } catch { }
 Write-Host ''
