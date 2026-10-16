@@ -40,6 +40,8 @@ Super 8GB. Other cards land as rows in
 
 ## Uncensored: Offrail 27B
 
+![Offrail 27B, the uncensored Bonsai 2 27B for 8GB and 12GB cards](assets/offrail_hf_banner_2x1.png)
+
 The same installer, the same bundles, the same MTP head, with the uncensored weights of the same model instead of
 PrismML's: OS-Software's Heretic build of ternary Qwen 3.8 27B. It answers what the standard build refuses, so use it
 where that is what you want. Everything else is unchanged: the tiers, the window steps, the vision tower, the speed
