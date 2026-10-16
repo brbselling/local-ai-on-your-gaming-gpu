@@ -427,7 +427,7 @@ EOF
   echo "Start it:         $dir/start-bonsai.sh"
   echo "Check your speed: $dir/bench-bonsai.sh, it saves your results and prints a short line to share"
   echo "Chat page:        http://127.0.0.1:$port"
-  echo "API for agents:   http://127.0.0.1:$port/v1 (OpenAI compatible, model bonsai-2-27b, any API key)"
+  echo "API for agents:   http://127.0.0.1:$port/v1 (OpenAI compatible, model $api_alias, any API key)"
   echo "Radeon support is in beta: run the speed check once and share the result, it sets the numbers for every Radeon owner."
   if [ -z "$test" ] && [ -z "${BONSAI_NO_START:-}" ]; then
     echo; echo "Starting it now, Ctrl+C stops it."; echo
