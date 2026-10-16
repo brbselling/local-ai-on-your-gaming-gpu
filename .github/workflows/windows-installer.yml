@@ -308,7 +308,7 @@ jobs:
           BONSAI_DIR: ${{ runner.temp }}/bonsai2
         run: |
           bash -n install.sh
-          set +e; cat install.sh | bash; rc=$?; set -e
+          set +e; cat install.sh | bash 2>&1 | tee "$RUNNER_TEMP/install.out"; rc=${PIPESTATUS[1]}; set -e
           if [ '${{ matrix.tier }}' = none ]; then [ $rc -ne 0 ] && [ ! -f "$BONSAI_DIR/start-bonsai.sh" ] && echo 'refused, as it should' && exit 0; echo 'it installed on a card it should refuse'; exit 1; fi
           [ $rc -eq 0 ] || exit 1
           bash -n "$BONSAI_DIR/start-bonsai.sh"
@@ -317,6 +317,8 @@ jobs:
           WANT_ALIAS='${{ matrix.alias }}'; [ -n "$WANT_ALIAS" ] || WANT_ALIAS='bonsai-2-27b'
           LEAN='${{ matrix.lean }}'; [ -n "$LEAN" ] || LEAN='mtp-lean'
           SLUG='bonsai2'; [ -z '${{ matrix.variant }}' ] || SLUG='offrail'
+          # the closing lines tell agents which model name to use; it must be this build's
+          grep -q "OpenAI compatible, model $WANT_ALIAS, any API key" "$RUNNER_TEMP/install.out"
           if [ -z '${{ matrix.drm }}' ]; then
             grep -q -- "--alias $WANT_ALIAS" "$BONSAI_DIR/start-bonsai.sh"
             grep -q '${{ matrix.bundle }}' "$BONSAI_DIR/start-bonsai.sh"
