@@ -29,7 +29,8 @@ and `bench-bonsai.bat` measures your card, see [Windows](#windows); on Linux `be
 does the same.
 
 The model today is Ternary Bonsai 2 27B, PrismML's 5.95 GB ternary Qwen 3.8 27B, with the Qwen 3.8 MTP speed head:
-50 tok/s on an RTX 3060 12GB. Windows is in beta until the first real-card runs are in.
+50 tok/s on an RTX 3060 12GB. Native Windows is measured on real cards too: 48.6 tok/s on an RTX 3060 12GB and 84.7 on
+an RTX 5070 Ti 16GB.
 
 Under the hood: serve lines per VRAM tier with the measured flags, a 1.5x faster decode kernel for the PrismML fork,
 the Qwen 3.8 MTP head grafted back onto the ternary file for lossless speculative decoding, and a sweep table that
@@ -151,7 +152,7 @@ RTX 50 cards with the head off), and llama.cpp's flash-attention q4_0 V dequant 
 release, `prism-b10743-adfffbe`, so if you built it before v1.1, clone it again.
 
 Measured on an RTX 5060 Ti 16GB with the v1.1 bundle (`sweeps/rtx5060ti-16gb.md`): fresh decode 42.0 tok/s on PrismML's
-prism-b10743, 53.4 with v1.1 and 67.3 with the MTP head (probe median, the 16GB line: fat file, mmproj, 262144); 39.5
+prism-b10743, 53.4 with v1.1 and 67.3 with the MTP head (probe median, the 16GB line: full file, mmproj, 262144); 39.5
 tok/s with the head at 38,774 tokens of context and 21.0 at 119,489; the head, the vision tower and the full 262,144
 window together in 15,070 MiB; four requests at once 127.1 tok/s in aggregate with the head, where prism-b10743 does 58.3
 without it. At 261,000 tokens, the full window, v1.1 decodes at 12.35 tok/s with the head off and 12.07 with it, where
@@ -231,7 +232,8 @@ The GGUF chat template defaults `reasoning_effort` to `xhigh`, which adds a "thi
 
 ## Windows
 
-A native build, no WSL needed, in beta until the first real-card runs are in. Needs Windows 10 or 11 x64, an RTX 20, 30
+A native build, no WSL needed, measured on an RTX 3060 12GB and an RTX 5070 Ti 16GB (`sweeps/rtx3060-12gb-windows.md`,
+`sweeps/rtx5070ti-16gb.md`). Needs Windows 10 or 11 x64, an RTX 20, 30
 or 40 card with NVIDIA driver 551.61 or newer (RTX 20 in beta, see [RTX 20 series](#rtx-20-series-turing-v14)) or an RTX
 50 card with driver 580 or newer, and about 10 GB of disk.
 
