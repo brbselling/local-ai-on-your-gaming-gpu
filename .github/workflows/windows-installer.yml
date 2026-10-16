@@ -466,7 +466,10 @@ jobs:
           BONSAI_NO_START: '1'
           BONSAI_DIR: ${{ runner.temp }}/bonsai2
         run: |
-          cat install.sh | bash
+          cat install.sh | bash 2>&1 | tee "$RUNNER_TEMP/install.out"; test "${PIPESTATUS[1]}" -eq 0
+          # no terminal here: the default build, no question, no /dev/tty error
+          if grep -q -E 'Which model|/dev/tty' "$RUNNER_TEMP/install.out"; then echo 'it asked with no terminal'; exit 1; fi
+          grep -q 'Bonsai 2 27B for small GPUs' "$RUNNER_TEMP/install.out"
           test -x "$BONSAI_DIR/${{ matrix.bundle }}/${{ matrix.server }}"
           bash -n "$BONSAI_DIR/start-bonsai.sh"
           file "$BONSAI_DIR/${{ matrix.bundle }}/${{ matrix.server }}"
