@@ -57,7 +57,12 @@ function Install-Bonsai2 {
         } catch { $variant = '' }
         Write-Host ''
     }
-    if ($variant -in @('offrail', 'uncensored')) { $variant = 'offrail' } else { $variant = 'base' }
+    if ($variant -in @('offrail', 'uncensored')) { $variant = 'offrail' }
+    elseif ($variant -in @('', 'base', 'bonsai', 'normal')) { $variant = 'base' }
+    else {
+        # a typo must not quietly install the other build (install.sh stops on a bad --model the same way)
+        Write-Host ("BONSAI_MODEL takes base or offrail, not '{0}'." -f $env:BONSAI_MODEL) -ForegroundColor Red; return
+    }
     $modelHf  = $hf
     $vname    = 'Bonsai 2 27B'
     $apiAlias = 'bonsai-2-27b'
