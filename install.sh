@@ -40,7 +40,8 @@ main() {
     offrail|uncensored)     variant=offrail ;;
     *) echo "--model takes base or offrail, not '$variant'."; return 1 ;;
   esac
-  if [ "$variant_set" = 0 ] && [ -z "${BONSAI_NO_PROMPT:-}" ] && [ -z "$test" ] && [ -r /dev/tty ]; then
+  # -r /dev/tty is true even with no terminal attached (ssh without -t, docker, cron, CI), so try to open it
+  if [ "$variant_set" = 0 ] && [ -z "${BONSAI_NO_PROMPT:-}" ] && [ -z "$test" ] && (: < /dev/tty) 2>/dev/null; then
     echo
     echo "Which model?"
     echo "  1) Bonsai 2 27B   the standard build (default)"
